@@ -243,6 +243,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         peer.step(msg.take_message())?;
 
         if peer.any_new_peer_catch_up(from_peer_id) {
+            info!("[region {}] notify with catch up", &region_id); 
             peer.heartbeat_pd(&self.pd_worker);
         }
 
@@ -968,6 +969,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 peer.set_region(derived.clone());
                 peer.post_split();
                 if peer.is_leader() {
+                    info!("[region {}] notify pd on ready split region", region_id);
                     peer.heartbeat_pd(&self.pd_worker);
                 }
                 (peer.peer_stat.clone(), peer.is_leader())
@@ -1043,6 +1045,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if is_leader {
                 // The new peer is likely to become leader, send a heartbeat immediately to reduce
                 // client query miss.
+                info!("[region {}] notify pd on ready split region2", region_id); 
                 new_peer.heartbeat_pd(&self.pd_worker);
             }
 
@@ -1913,6 +1916,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         for peer in self.region_peers.values_mut() {
             if peer.is_leader() {
                 leader_count += 1;
+
                 peer.heartbeat_pd(&self.pd_worker);
             }
         }
