@@ -52,8 +52,9 @@ version = "0.1.4"
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
 
-[dev-dependencies]
-raft = "0.4"
+[dev-dependencies.raft]
+git = "https://github.com/nolouch/raft-rs.git"
+branch = "fix-read-index"
 
 [[bench]]
 name = "channel"

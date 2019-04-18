@@ -9,9 +9,8 @@ portable = ["engine_rocksdb/portable"]
 sse = ["engine_rocksdb/sse"]
 
 [dependencies]
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="use-raft-fixes" }
 protobuf = "~2.0"
-raft = "0.4"
 quick-error = "1.2.2"
 crc = "1.8"
 lazy_static = "0.2.1"
@@ -34,6 +33,10 @@ features = ["nightly"]
 [dependencies.engine_rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
 package = "rocksdb"
+
+[dependencies.raft]
+git = "https://github.com/nolouch/raft-rs.git"
+branch = "fix-read-index"
 
 [dev-dependencies]
 tempdir = "0.3"
