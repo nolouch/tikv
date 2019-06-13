@@ -54,10 +54,11 @@ pub enum Task {
     Heartbeat {
         region: metapb::Region,
         peer: metapb::Peer,
+        term: u64,
         down_peers: Vec<pdpb::PeerStats>,
         pending_peers: Vec<metapb::Peer>,
-        written_bytes: u64,
-        written_keys: u64,
+        total_written_bytes: u64,
+        total_written_keys: u64,
         approximate_size: Option<u64>,
         approximate_keys: Option<u64>,
     },
@@ -112,14 +113,106 @@ impl Default for StoreStat {
 }
 
 #[derive(Default)]
-pub struct PeerStat {
-    pub read_bytes: u64,
-    pub read_keys: u64,
+pub struct RegionCollection {
+    pub term: u64,
+
+    pub read_bytes_delta: u64,
+    pub read_keys_delta: u64,
+
     pub last_read_bytes: u64,
     pub last_read_keys: u64,
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
     pub last_report_ts: u64,
+
+    pub region_heartbeat_interval: u64,
+    pub is_leader_changed: bool,
+}
+
+impl RegionCollection {
+    fn merge_flow_statistics(&mut self, stats: FlowStatistics) {
+        if stats.read_bytes > 0 {
+            self.read_bytes_delta += stats.read_bytes as u64;
+        }
+        if stats.read_keys > 0 {
+            self.read_keys_delta += stats.read_keys as u64;
+        }
+
+        self.update_term(stats.term);
+    }
+
+    fn update_term(&mut self, term: u64) {
+        if self.term != term {
+            self.term = term;
+            self.is_leader_changed = true;
+        }
+    }
+
+    fn heartbeat(
+        &mut self,
+        db: &DB,
+        hb_task: Task,
+    ) -> Option<(metapb::Region, metapb::Peer, RegionStat)> {
+        match hb_task {
+            Task::Heartbeat {
+                region,
+                peer,
+                down_peers,
+                term,
+                pending_peers,
+                total_written_bytes,
+                total_written_keys,
+                approximate_size,
+                approximate_keys,
+            } => {
+                let mut last_report_ts = self.last_report_ts;
+                self.last_report_ts = time_now_sec();
+                if self.is_leader_changed {
+                    self.is_leader_changed = false;
+                    return None;
+                }
+                last_report_ts = cmp::max(
+                    last_report_ts,
+                    self.last_report_ts - self.region_heartbeat_interval,
+                );
+                let approximate_size = approximate_size.unwrap_or_else(|| {
+                    get_region_approximate_size(&db, &region).unwrap_or_default()
+                });
+                let approximate_keys = approximate_keys.unwrap_or_else(|| {
+                    get_region_approximate_keys(&db, &region).unwrap_or_default()
+                });
+
+                self.read_bytes_delta = 0;
+                self.read_keys_delta = 0;
+                let mut written_bytes_delta = 0;
+                let mut written_keys_delta = 0;
+                if self.last_written_bytes < total_written_bytes {
+                    written_bytes_delta += total_written_bytes - self.last_written_bytes;
+                    self.last_written_bytes = total_written_bytes;
+                }
+                if self.last_written_keys < total_written_keys {
+                    written_keys_delta += total_written_keys - self.last_written_keys;
+                    self.last_written_keys = total_written_keys;
+                }
+                self.update_term(term);
+                let region_stat = RegionStat {
+                    term,
+                    down_peers,
+                    pending_peers,
+                    written_bytes: written_bytes_delta,
+                    written_keys: written_keys_delta,
+                    read_bytes: self.read_bytes_delta,
+                    read_keys: self.read_keys_delta,
+                    approximate_size,
+                    approximate_keys,
+                    last_report_ts,
+                };
+                Some((region, peer, region_stat))
+            }
+
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl Display for Task {
@@ -178,12 +271,19 @@ impl Display for Task {
     }
 }
 
+impl RegionCollection {
+    pub fn with_hearbeat_interval(mut self, interval: u64) -> RegionCollection {
+        self.region_heartbeat_interval = interval;
+        self
+    }
+}
+
 pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
     router: RaftRouter,
     db: Arc<DB>,
-    region_peers: HashMap<u64, PeerStat>,
+    region_collections: HashMap<u64, RegionCollection>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
     // Seconds between when a region is expected to send a heartbeat.
@@ -210,7 +310,7 @@ impl<T: PdClient> Runner<T> {
             router,
             db,
             is_hb_receiver_scheduled: false,
-            region_peers: HashMap::default(),
+            region_collections: HashMap::default(),
             store_stat: StoreStat::default(),
             region_heartbeat_interval,
             scheduler,
@@ -336,37 +436,37 @@ impl<T: PdClient> Runner<T> {
         handle.spawn(f)
     }
 
-    fn handle_heartbeat(
-        &self,
-        handle: &Handle,
-        region: metapb::Region,
-        peer: metapb::Peer,
-        region_stat: RegionStat,
-    ) {
-        self.store_stat
-            .region_bytes_written
-            .observe(region_stat.written_bytes as f64);
-        self.store_stat
-            .region_keys_written
-            .observe(region_stat.written_keys as f64);
-        self.store_stat
-            .region_bytes_read
-            .observe(region_stat.read_bytes as f64);
-        self.store_stat
-            .region_keys_read
-            .observe(region_stat.read_keys as f64);
+    fn handle_heartbeat(&mut self, handle: &Handle, region_id: u64, hb_task: Task) {
+        let heartbeat_interval = self.region_heartbeat_interval;
+        let collection = self.region_collections.entry(region_id).or_insert_with(|| {
+            RegionCollection::default().with_hearbeat_interval(heartbeat_interval)
+        });
+        if let Some((region, peer, region_stat)) = collection.heartbeat(&self.db, hb_task) {
+            self.store_stat
+                .region_bytes_written
+                .observe(region_stat.written_bytes as f64);
+            self.store_stat
+                .region_keys_written
+                .observe(region_stat.written_keys as f64);
+            self.store_stat
+                .region_bytes_read
+                .observe(region_stat.read_bytes as f64);
+            self.store_stat
+                .region_keys_read
+                .observe(region_stat.read_keys as f64);
 
-        let f = self
-            .pd_client
-            .region_heartbeat(region.clone(), peer.clone(), region_stat)
-            .map_err(move |e| {
-                debug!(
-                    "failed to send heartbeat";
-                    "region_id" => region.get_id(),
-                    "err" => ?e
-                );
-            });
-        handle.spawn(f);
+            let f = self
+                .pd_client
+                .region_heartbeat(region.clone(), peer.clone(), region_stat)
+                .map_err(move |e| {
+                    debug!(
+                        "failed to send heartbeat";
+                        "region_id" => region.get_id(),
+                        "err" => ?e
+                    );
+                });
+            handle.spawn(f);
+        }
     }
 
     fn handle_store_heartbeat(
@@ -610,20 +710,19 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_read_stats(&mut self, read_stats: HashMap<u64, FlowStatistics>) {
+        let heartbeat_interval = self.region_heartbeat_interval;
         for (region_id, stats) in read_stats {
-            let peer_stat = self
-                .region_peers
-                .entry(region_id)
-                .or_insert_with(PeerStat::default);
-            peer_stat.read_bytes += stats.read_bytes as u64;
-            peer_stat.read_keys += stats.read_keys as u64;
             self.store_stat.engine_total_bytes_read += stats.read_bytes as u64;
             self.store_stat.engine_total_keys_read += stats.read_keys as u64;
+            let region_collection = self.region_collections.entry(region_id).or_insert_with(|| {
+                RegionCollection::default().with_hearbeat_interval(heartbeat_interval)
+            });
+            region_collection.merge_flow_statistics(stats);
         }
     }
 
     fn handle_destroy_peer(&mut self, region_id: u64) {
-        match self.region_peers.remove(&region_id) {
+        match self.region_collections.remove(&region_id) {
             None => return,
             Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
         }
@@ -663,66 +762,28 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             Task::Heartbeat {
                 region,
                 peer,
+                term,
                 down_peers,
                 pending_peers,
-                written_bytes,
-                written_keys,
+                total_written_bytes,
+                total_written_keys,
                 approximate_size,
                 approximate_keys,
             } => {
-                let approximate_size = approximate_size.unwrap_or_else(|| {
-                    get_region_approximate_size(&self.db, &region).unwrap_or_default()
-                });
-                let approximate_keys = approximate_keys.unwrap_or_else(|| {
-                    get_region_approximate_keys(&self.db, &region).unwrap_or_default()
-                });
-                let (
-                    read_bytes_delta,
-                    read_keys_delta,
-                    written_bytes_delta,
-                    written_keys_delta,
-                    last_report_ts,
-                ) = {
-                    let peer_stat = self
-                        .region_peers
-                        .entry(region.get_id())
-                        .or_insert_with(PeerStat::default);
-                    let read_bytes_delta = peer_stat.read_bytes - peer_stat.last_read_bytes;
-                    let read_keys_delta = peer_stat.read_keys - peer_stat.last_read_keys;
-                    let written_bytes_delta = written_bytes - peer_stat.last_written_bytes;
-                    let written_keys_delta = written_keys - peer_stat.last_written_keys;
-                    let mut last_report_ts = peer_stat.last_report_ts;
-                    peer_stat.last_written_bytes = written_bytes;
-                    peer_stat.last_written_keys = written_keys;
-                    peer_stat.last_read_bytes = peer_stat.read_bytes;
-                    peer_stat.last_read_keys = peer_stat.read_keys;
-                    peer_stat.last_report_ts = time_now_sec();
-                    last_report_ts = cmp::max(
-                        last_report_ts,
-                        peer_stat.last_report_ts - self.region_heartbeat_interval,
-                    );
-                    (
-                        read_bytes_delta,
-                        read_keys_delta,
-                        written_bytes_delta,
-                        written_keys_delta,
-                        last_report_ts,
-                    )
-                };
+                let region_id = region.get_id();
                 self.handle_heartbeat(
                     handle,
-                    region,
-                    peer,
-                    RegionStat {
+                    region_id,
+                    Task::Heartbeat {
+                        region,
+                        peer,
+                        term,
                         down_peers,
                         pending_peers,
-                        written_bytes: written_bytes_delta,
-                        written_keys: written_keys_delta,
-                        read_bytes: read_bytes_delta,
-                        read_keys: read_keys_delta,
+                        total_written_bytes,
+                        total_written_keys,
                         approximate_size,
                         approximate_keys,
-                        last_report_ts,
                     },
                 )
             }
