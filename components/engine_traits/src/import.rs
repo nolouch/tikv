@@ -33,4 +33,6 @@ pub trait IngestExternalFileOptions {
     fn new() -> Self;
 
     fn move_files(&mut self, f: bool);
+
+    fn enable_flow_control(&mut self, f: bool);
 }

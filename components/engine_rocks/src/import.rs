@@ -1,8 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
+use engine::rocks::util;
+use engine_traits::CFHandleExt;
 use engine_traits::ImportExt;
-use engine_traits::IngestExternalFileOptions;
+use engine_traits::{ColumnFamilyOptions, IngestExternalFileOptions};
 use engine_traits::{Error, Result};
 use rocksdb::set_external_sst_file_global_seq_no;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
@@ -28,9 +30,22 @@ impl ImportExt for RocksEngine {
         opts: &Self::IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<()> {
+        if opts.enable_flow_control {
+            if let Some(n) = util::get_cf_num_files_at_level(&self.as_inner(), cf.as_inner(), 0) {
+                let options = self.get_options_cf(cf);
+                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+                // Leave enough buffer to tolerate heavy write workload,
+                // which may flush some memtables in a short time.
+                if n > u64::from(slowdown_trigger) / 2 {
+                    return Err(Error::Engine(format!(
+                        "too many external files are ingesting"
+                    )));
+                }
+            }
+        }
         let cf = cf.as_inner();
         self.as_inner()
-            .ingest_external_file_cf(&cf, &opts.0, files)?;
+            .ingest_external_file_cf(&cf, &opts.inner_opts, files)?;
         Ok(())
     }
 
@@ -77,15 +92,25 @@ impl ImportExt for RocksEngine {
     }
 }
 
-pub struct RocksIngestExternalFileOptions(RawIngestExternalFileOptions);
+pub struct RocksIngestExternalFileOptions {
+    inner_opts: RawIngestExternalFileOptions,
+    enable_flow_control: bool,
+}
 
 impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
     fn new() -> RocksIngestExternalFileOptions {
-        RocksIngestExternalFileOptions(RawIngestExternalFileOptions::new())
+        RocksIngestExternalFileOptions {
+            inner_opts: RawIngestExternalFileOptions::new(),
+            enable_flow_control: false,
+        }
     }
 
     fn move_files(&mut self, f: bool) {
-        self.0.move_files(f);
+        self.inner_opts.move_files(f);
+    }
+
+    fn enable_flow_control(&mut self, f: bool) {
+        self.enable_flow_control = f;
     }
 }
 

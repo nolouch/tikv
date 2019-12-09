@@ -355,6 +355,7 @@ impl ImportDir {
 
         let mut opts = E::IngestExternalFileOptions::new();
         opts.move_files(true);
+        opts.enable_flow_control(true);
         engine.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])?;
         Ok(())
     }
