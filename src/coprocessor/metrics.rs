@@ -290,6 +290,7 @@ fn build_region_info() -> RegionInfo {
         peer: metapb::Peer::default(),
     }
 }
+
 impl RegionInfo {
     fn update(&mut self, peer: &metapb::Peer) {
         self.peer = peer.clone();
@@ -331,6 +332,7 @@ impl Hub {
     }
 
     fn flush(&mut self) -> Vec<(u64, Vec<u8>, metapb::Peer)> {
+        info!("reporter-split");
         let mut split_infos = Vec::default();
         for (region_id, region_info) in self.region_qps.iter() {
             if (*region_info).qps > QPS_THRESHOLD {
@@ -341,6 +343,10 @@ impl Hub {
                 recorder.record(self.region_keys.get(region_id).unwrap());
                 let key = recorder.split_key();
                 if !key.is_empty() {
+                    info!("reporter-split";
+                        "region_id" => *region_id,
+                        "key" => std::str::from_utf8(&key).unwrap(),
+                    );
                     split_infos.push((*region_id, key, (*region_info).peer.clone()));
                     self.region_recorder.remove(region_id);
                 }
