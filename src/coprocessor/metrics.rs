@@ -9,6 +9,12 @@ use tikv_util::collections::HashMap;
 use prometheus::local::*;
 use prometheus::*;
 
+use std::cmp::Ordering;
+use rand::Rng;
+use std::time::{Duration, SystemTime};
+use kvproto::metapb;
+use std::sync::{Arc, Mutex};
+
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_duration_seconds",
@@ -75,6 +81,7 @@ pub struct CopLocalMetrics {
     pub local_copr_req_wait_time: LocalHistogramVec,
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
+    hub:Arc<Mutex<Hub>>,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_cop_flow_stats: HashMap<u64, FlowStatistics>,
 }
@@ -96,6 +103,8 @@ thread_local! {
                 HashMap::default(),
             local_cop_flow_stats:
                 HashMap::default(),
+            hub:
+                Arc::new(Mutex::new(build_hub())),
         }
     );
 }
@@ -130,6 +139,8 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
 
         reporter.report_read_stats(read_stats);
+
+        reporter.split(m.hub.lock().unwrap().flush());
     });
 }
 
@@ -152,4 +163,184 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
         flow_stats.add(&statistics.write.flow_stats);
         flow_stats.add(&statistics.data.flow_stats);
     });
+}
+
+pub fn tls_collect_qps(region_id: u64, peer: &metapb::Peer, start_key: &Vec<u8>, end_key: &Vec<u8>) {
+    TLS_COP_METRICS.with(|m| {
+        let m = m.borrow_mut();
+        m.hub.lock().unwrap().add(region_id,peer, start_key, end_key);
+    });
+}
+
+const QPS_THRESHOLD: u64 = 2500;
+const DETECT_TIMES: u32 = 10;
+const DETECT_INTERVAL: Duration = Duration::from_secs(1);
+
+pub struct Sample {
+    pub key: Vec<u8>,
+    pub left: i32,
+    pub contained: i32,
+    pub right: i32,
+}
+
+fn build_sample(key: Vec<u8>) -> Sample {
+    Sample {
+        key,
+        left: 0,
+        contained: 0,
+        right: 0,
+    }
+}
+
+pub struct KeyRange {
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
+    pub qps: u64,
+}
+
+fn build_key_range(start_key: &Vec<u8>, end_key: &Vec<u8>) -> KeyRange {
+    KeyRange {
+        start_key:start_key.clone(),
+        end_key:end_key.clone(),
+        qps: 0,
+    }
+}
+
+pub struct Recorder {
+    pub samples: Vec<Sample>,
+    pub times: u32,
+    pub count: u64,
+    pub create_time: SystemTime,
+}
+
+fn build_recorder() -> Recorder {
+    Recorder {
+        samples: vec![],
+        times: 0,
+        count: 0,
+        create_time: SystemTime::now(),
+    }
+}
+
+impl Recorder {
+    fn record(&mut self, key_ranges: &Vec<KeyRange>) {
+        let mut rng = rand::thread_rng();
+        self.times += 1;
+        for key_range in key_ranges.iter() {
+            self.count += 1;
+            if self.samples.len() < 20 {
+                self.samples.push(build_sample(key_range.start_key.clone()));
+            } else {
+                let i = rng.gen_range(0, self.count) as usize;
+                if i < 20 {
+                    self.samples[i] = build_sample(key_range.start_key.clone());
+                }
+            }
+            for mut sample in self.samples.iter_mut() {
+                let key = &sample.key;
+                if key.cmp(&key_range.start_key) == Ordering::Less {
+                    sample.left += 1;
+                } else if key_range.end_key.len() != 0 && key.cmp(&key_range.end_key) == Ordering::Greater  {
+                    sample.right += 1;
+                }else{
+                    sample.contained+=1;
+                }
+            }
+        }
+    }
+
+    fn split_key(&self) -> Vec<u8> {
+        if self.times < DETECT_TIMES {
+            return vec![];
+        }
+        let mut best_index: i32 = -1;
+        let mut best_score = 2.0;
+        for index in 0..self.samples.len() {
+            let sample = &self.samples[index];
+            if sample.contained + sample.left + sample.right < 100 {
+                continue;
+            }
+            let diff = (sample.left - sample.right) as f64;
+            let balance_score = diff.abs() / (sample.left + sample.right) as f64;
+            if balance_score < best_score {
+                best_index = index as i32;
+                best_score = balance_score;
+            }
+        }
+        if best_index >= 0 {
+            return self.samples[best_index as usize].key.clone();
+        }
+        return vec![];
+    }
+}
+
+
+pub struct RegionInfo {
+    pub  peer: metapb::Peer,
+    pub qps:u64,
+}
+
+fn build_region_info() ->RegionInfo {
+    RegionInfo{
+        qps:0,
+        peer: metapb::Peer::default(),
+    }
+}
+impl RegionInfo{
+    fn update(&mut self,peer: &metapb::Peer){
+        self.peer=peer.clone();
+        self.qps+=1
+    }
+}
+
+pub struct Hub {
+    pub region_qps: HashMap<u64, RegionInfo>,
+    pub region_keys: HashMap<u64, Vec<KeyRange>>,
+    pub region_recorder: HashMap<u64, Recorder>,
+}
+
+fn build_hub()->Hub{
+    Hub{
+        region_qps:HashMap::default(),
+        region_keys:HashMap::default(),
+        region_recorder:HashMap::default(),
+    }
+}
+
+impl Hub {
+    fn add(&mut self, region_id: u64, peer: &metapb::Peer, start_key: &Vec<u8>, end_key: &Vec<u8>) {
+        let region_info = self.region_qps.entry(region_id).or_insert(build_region_info());
+        region_info.update(peer);
+        let key_ranges = self.region_keys.entry(region_id).or_insert(vec![]);
+        (*key_ranges).push(build_key_range(start_key, end_key));
+    }
+
+    fn clear(&mut self) {
+        self.region_keys.clear();
+        self.region_qps.clear();
+        self.region_recorder.retain(|_, recorder| {
+            recorder.create_time.elapsed().unwrap() < DETECT_INTERVAL * (DETECT_TIMES+1)
+        });
+    }
+
+    fn flush(&mut self)->Vec<(u64,Vec<u8>,metapb::Peer)> {
+        let mut split_infos = Vec::default();
+        for (region_id, region_info) in self.region_qps.iter() {
+            if (*region_info).qps > QPS_THRESHOLD {
+                let recorder = self.region_recorder.entry(*region_id).or_insert(build_recorder());
+                recorder.record(self.region_keys.get(region_id).unwrap());
+                let key = recorder.split_key();
+                if key.len()!=0 {
+                    split_infos.push((
+                        *region_id,key,(*region_info).peer.clone(),
+                    ));
+                    self.region_recorder.remove(region_id);
+                }
+            } else {
+                self.region_recorder.remove(region_id).unwrap();
+            }
+        }
+        self.clear();
+        split_infos
+    }
 }

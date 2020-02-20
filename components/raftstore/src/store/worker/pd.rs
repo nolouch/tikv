@@ -58,12 +58,20 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     // saves the flow statistics of different region.
     // TODO: maybe we need to return a Result later?
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
+
+    fn split(&self,split_infos:Vec<(u64,Vec<u8>,metapb::Peer)>);
 }
 
 impl FlowStatsReporter for Scheduler<Task> {
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
             error!("Failed to send read flow statistics"; "err" => ?e);
+        }
+    }
+
+    fn split(&self,split_infos:Vec<(u64,Vec<u8>,metapb::Peer)>){
+        if let Err(e) = self.schedule(Task::ToAskSplit { split_infos }) {
+            error!("Failed to send split infos"; "err" => ?e);
         }
     }
 }
@@ -91,6 +99,9 @@ pub enum Task {
         // If true, right Region derives origin region_id.
         right_derive: bool,
         callback: Callback<RocksEngine>,
+    },
+    ToAskSplit{
+        split_infos:Vec<(u64,Vec<u8>,metapb::Peer)>,
     },
     Heartbeat {
         term: u64,
@@ -193,6 +204,12 @@ impl Display for Task {
                 "ask split region {} with key {}",
                 region.get_id(),
                 hex::encode_upper(&split_key),
+            ),
+            Task::ToAskSplit {
+                ..
+            } => write!(
+                f,
+                "to ask split region"
             ),
             Task::AskBatchSplit {
                 ref region,
@@ -869,6 +886,20 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 right_derive,
                 callback,
             ),
+            Task::ToAskSplit {
+                split_infos,
+            } => {
+                for (id,split_key,peer) in split_infos{
+                    match self.pd_client.get_region_by_id(id).wait(){
+                        Ok(Some(region))=>{
+                            self.handle_ask_split(handle, region, split_key, peer, true, Callback::None);
+                        }
+                        _ => {}
+                    }
+
+                }
+            },
+
             Task::Heartbeat {
                 term,
                 region,
