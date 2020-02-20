@@ -130,8 +130,14 @@ impl ReqContext {
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
-        let mut min = ranges.first().as_ref().unwrap().start.clone();
-        let mut max = ranges.last().as_ref().unwrap().end.clone();
+        let mut min = match ranges.first().as_ref() {
+            Some(range) => range.start.clone(),
+            None => vec![],
+        };
+        let mut max = match ranges.last().as_ref() {
+            Some(range) => range.end.clone(),
+            None => vec![],
+        };
         if min > max {
             mem::swap(&mut min, &mut max);
         }
