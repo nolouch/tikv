@@ -165,12 +165,7 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     });
 }
 
-pub fn tls_collect_qps(
-    region_id: u64,
-    peer: &metapb::Peer,
-    start_key: &Vec<u8>,
-    end_key: &Vec<u8>,
-) {
+pub fn tls_collect_qps(region_id: u64, peer: &metapb::Peer, start_key: &[u8], end_key: &[u8]) {
     TLS_COP_METRICS.with(|m| {
         let m = m.borrow_mut();
         m.hub
@@ -206,10 +201,10 @@ pub struct KeyRange {
     pub qps: u64,
 }
 
-fn build_key_range(start_key: &Vec<u8>, end_key: &Vec<u8>) -> KeyRange {
+fn build_key_range(start_key: &[u8], end_key: &[u8]) -> KeyRange {
     KeyRange {
-        start_key: start_key.clone(),
-        end_key: end_key.clone(),
+        start_key: start_key.to_owned(),
+        end_key: end_key.to_owned(),
         qps: 0,
     }
 }
@@ -231,7 +226,7 @@ fn build_recorder() -> Recorder {
 }
 
 impl Recorder {
-    fn record(&mut self, key_ranges: &Vec<KeyRange>) {
+    fn record(&mut self, key_ranges: &[KeyRange]) {
         let mut rng = rand::thread_rng();
         self.times += 1;
         for key_range in key_ranges.iter() {
@@ -248,7 +243,7 @@ impl Recorder {
                 let key = &sample.key;
                 if key.cmp(&key_range.start_key) == Ordering::Less {
                     sample.left += 1;
-                } else if key_range.end_key.len() != 0
+                } else if !key_range.end_key.is_empty()
                     && key.cmp(&key_range.end_key) == Ordering::Greater
                 {
                     sample.right += 1;
@@ -317,13 +312,13 @@ fn build_hub() -> Hub {
 }
 
 impl Hub {
-    fn add(&mut self, region_id: u64, peer: &metapb::Peer, start_key: &Vec<u8>, end_key: &Vec<u8>) {
+    fn add(&mut self, region_id: u64, peer: &metapb::Peer, start_key: &[u8], end_key: &[u8]) {
         let region_info = self
             .region_qps
             .entry(region_id)
-            .or_insert(build_region_info());
+            .or_insert_with(build_region_info);
         region_info.update(peer);
-        let key_ranges = self.region_keys.entry(region_id).or_insert(vec![]);
+        let key_ranges = self.region_keys.entry(region_id).or_insert_with(|| vec![]);
         (*key_ranges).push(build_key_range(start_key, end_key));
     }
 
@@ -342,10 +337,10 @@ impl Hub {
                 let recorder = self
                     .region_recorder
                     .entry(*region_id)
-                    .or_insert(build_recorder());
+                    .or_insert_with(build_recorder);
                 recorder.record(self.region_keys.get(region_id).unwrap());
                 let key = recorder.split_key();
-                if key.len() != 0 {
+                if !key.is_empty() {
                     split_infos.push((*region_id, key, (*region_info).peer.clone()));
                     self.region_recorder.remove(region_id);
                 }

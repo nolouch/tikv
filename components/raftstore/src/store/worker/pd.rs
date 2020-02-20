@@ -260,7 +260,7 @@ impl Display for Task {
                 cpu_usages, read_io_rates, write_io_rates,
             ),
             Task::RefreshConfig => write!(f, "refresh config"),
-            Task::GetConfig {..} => write!(f, "get config"),
+            Task::GetConfig { .. } => write!(f, "get config"),
         }
     }
 }
@@ -765,7 +765,7 @@ impl<T: PdClient + ConfigClient> Runner<T> {
                     let mut split_region = resp.take_split_region();
                     info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
                     let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
-                        CasualMessage::SplitRegion{
+                        CasualMessage::SplitRegion {
                             region_epoch: epoch,
                             split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
@@ -888,18 +888,15 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
             ),
             Task::ToAskSplit { split_infos } => {
                 for (id, split_key, peer) in split_infos {
-                    match self.pd_client.get_region_by_id(id).wait() {
-                        Ok(Some(region)) => {
-                            self.handle_ask_split(
-                                handle,
-                                region,
-                                split_key,
-                                peer,
-                                true,
-                                Callback::None,
-                            );
-                        }
-                        _ => {}
+                    if let Ok(Some(region)) = self.pd_client.get_region_by_id(id).wait() {
+                        self.handle_ask_split(
+                            handle,
+                            region,
+                            split_key,
+                            peer,
+                            true,
+                            Callback::None,
+                        );
                     }
                 }
             }
