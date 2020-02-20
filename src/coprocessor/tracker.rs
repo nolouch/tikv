@@ -229,7 +229,7 @@ impl Tracker {
         let start_key = &self.req_ctx.min;
         let end_key = &self.req_ctx.max;
 
-        tls_collect_qps(region_id,peer,start_key,end_key);
+        tls_collect_qps(region_id, peer, start_key, end_key);
         self.current_stage = TrackerState::Tracked;
     }
 }

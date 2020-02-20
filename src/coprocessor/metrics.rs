@@ -9,11 +9,11 @@ use tikv_util::collections::HashMap;
 use prometheus::local::*;
 use prometheus::*;
 
-use std::cmp::Ordering;
-use rand::Rng;
-use std::time::{Duration, SystemTime};
 use kvproto::metapb;
+use rand::Rng;
+use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
@@ -81,7 +81,7 @@ pub struct CopLocalMetrics {
     pub local_copr_req_wait_time: LocalHistogramVec,
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
-    hub:Arc<Mutex<Hub>>,
+    hub: Arc<Mutex<Hub>>,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_cop_flow_stats: HashMap<u64, FlowStatistics>,
 }
@@ -165,10 +165,18 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     });
 }
 
-pub fn tls_collect_qps(region_id: u64, peer: &metapb::Peer, start_key: &Vec<u8>, end_key: &Vec<u8>) {
+pub fn tls_collect_qps(
+    region_id: u64,
+    peer: &metapb::Peer,
+    start_key: &Vec<u8>,
+    end_key: &Vec<u8>,
+) {
     TLS_COP_METRICS.with(|m| {
         let m = m.borrow_mut();
-        m.hub.lock().unwrap().add(region_id,peer, start_key, end_key);
+        m.hub
+            .lock()
+            .unwrap()
+            .add(region_id, peer, start_key, end_key);
     });
 }
 
@@ -200,8 +208,8 @@ pub struct KeyRange {
 
 fn build_key_range(start_key: &Vec<u8>, end_key: &Vec<u8>) -> KeyRange {
     KeyRange {
-        start_key:start_key.clone(),
-        end_key:end_key.clone(),
+        start_key: start_key.clone(),
+        end_key: end_key.clone(),
         qps: 0,
     }
 }
@@ -240,10 +248,12 @@ impl Recorder {
                 let key = &sample.key;
                 if key.cmp(&key_range.start_key) == Ordering::Less {
                     sample.left += 1;
-                } else if key_range.end_key.len() != 0 && key.cmp(&key_range.end_key) == Ordering::Greater  {
+                } else if key_range.end_key.len() != 0
+                    && key.cmp(&key_range.end_key) == Ordering::Greater
+                {
                     sample.right += 1;
-                }else{
-                    sample.contained+=1;
+                } else {
+                    sample.contained += 1;
                 }
             }
         }
@@ -274,22 +284,21 @@ impl Recorder {
     }
 }
 
-
 pub struct RegionInfo {
-    pub  peer: metapb::Peer,
-    pub qps:u64,
+    pub peer: metapb::Peer,
+    pub qps: u64,
 }
 
-fn build_region_info() ->RegionInfo {
-    RegionInfo{
-        qps:0,
+fn build_region_info() -> RegionInfo {
+    RegionInfo {
+        qps: 0,
         peer: metapb::Peer::default(),
     }
 }
-impl RegionInfo{
-    fn update(&mut self,peer: &metapb::Peer){
-        self.peer=peer.clone();
-        self.qps+=1
+impl RegionInfo {
+    fn update(&mut self, peer: &metapb::Peer) {
+        self.peer = peer.clone();
+        self.qps += 1
     }
 }
 
@@ -299,17 +308,20 @@ pub struct Hub {
     pub region_recorder: HashMap<u64, Recorder>,
 }
 
-fn build_hub()->Hub{
-    Hub{
-        region_qps:HashMap::default(),
-        region_keys:HashMap::default(),
-        region_recorder:HashMap::default(),
+fn build_hub() -> Hub {
+    Hub {
+        region_qps: HashMap::default(),
+        region_keys: HashMap::default(),
+        region_recorder: HashMap::default(),
     }
 }
 
 impl Hub {
     fn add(&mut self, region_id: u64, peer: &metapb::Peer, start_key: &Vec<u8>, end_key: &Vec<u8>) {
-        let region_info = self.region_qps.entry(region_id).or_insert(build_region_info());
+        let region_info = self
+            .region_qps
+            .entry(region_id)
+            .or_insert(build_region_info());
         region_info.update(peer);
         let key_ranges = self.region_keys.entry(region_id).or_insert(vec![]);
         (*key_ranges).push(build_key_range(start_key, end_key));
@@ -319,21 +331,22 @@ impl Hub {
         self.region_keys.clear();
         self.region_qps.clear();
         self.region_recorder.retain(|_, recorder| {
-            recorder.create_time.elapsed().unwrap() < DETECT_INTERVAL * (DETECT_TIMES+1)
+            recorder.create_time.elapsed().unwrap() < DETECT_INTERVAL * (DETECT_TIMES + 1)
         });
     }
 
-    fn flush(&mut self)->Vec<(u64,Vec<u8>,metapb::Peer)> {
+    fn flush(&mut self) -> Vec<(u64, Vec<u8>, metapb::Peer)> {
         let mut split_infos = Vec::default();
         for (region_id, region_info) in self.region_qps.iter() {
             if (*region_info).qps > QPS_THRESHOLD {
-                let recorder = self.region_recorder.entry(*region_id).or_insert(build_recorder());
+                let recorder = self
+                    .region_recorder
+                    .entry(*region_id)
+                    .or_insert(build_recorder());
                 recorder.record(self.region_keys.get(region_id).unwrap());
                 let key = recorder.split_key();
-                if key.len()!=0 {
-                    split_infos.push((
-                        *region_id,key,(*region_info).peer.clone(),
-                    ));
+                if key.len() != 0 {
+                    split_infos.push((*region_id, key, (*region_info).peer.clone()));
                     self.region_recorder.remove(region_id);
                 }
             } else {

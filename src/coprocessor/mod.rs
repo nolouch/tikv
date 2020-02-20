@@ -37,10 +37,10 @@ pub use checksum::checksum_crc64_xor;
 use crate::storage::Statistics;
 use async_trait::async_trait;
 use kvproto::{coprocessor as coppb, kvrpcpb};
+use std::mem;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 use txn_types::TsSet;
-use std::mem;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -113,8 +113,8 @@ pub struct ReqContext {
     /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
 
-    pub min:Vec<u8>,
-    pub max:Vec<u8>,
+    pub min: Vec<u8>,
+    pub max: Vec<u8>,
 }
 
 impl ReqContext {
@@ -132,7 +132,7 @@ impl ReqContext {
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
         let mut min = ranges.first().as_ref().unwrap().start.clone();
         let mut max = ranges.last().as_ref().unwrap().end.clone();
-        if min > max{
+        if min > max {
             mem::swap(&mut min, &mut max);
         }
         Self {
