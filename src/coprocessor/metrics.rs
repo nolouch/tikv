@@ -351,7 +351,7 @@ impl Hub {
                     self.region_recorder.remove(region_id);
                 }
             } else {
-                self.region_recorder.remove(region_id).unwrap();
+                self.region_recorder.remove_entry(region_id);
             }
         }
         self.clear();
