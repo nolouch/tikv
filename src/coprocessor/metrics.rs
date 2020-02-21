@@ -10,8 +10,10 @@ use prometheus::local::*;
 use prometheus::*;
 
 use kvproto::metapb;
+use raftstore::store::SplitInfo;
 use rand::Rng;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -54,6 +56,12 @@ lazy_static! {
         "tikv_coprocessor_scan_details",
         "Bucketed counter of coprocessor scan details for each CF",
         &["req", "cf", "tag"]
+    )
+    .unwrap();
+    pub static ref COPR_QPS_TOPN: IntCounterVec = register_int_counter_vec!(
+        "tikv_coprocessor_qps_topn",
+        "tikv_coprocessor_qps_topn",
+        &["order"]
     )
     .unwrap();
     pub static ref COPR_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
@@ -140,7 +148,13 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
 
         reporter.report_read_stats(read_stats);
 
-        reporter.split(m.hub.lock().unwrap().flush());
+        let (top, split_infos) = m.hub.lock().unwrap().flush();
+        reporter.split(split_infos);
+        for i in 0..top.len() {
+            COPR_QPS_TOPN
+                .with_label_values(&[&i.to_string()])
+                .inc_by(top[i] as i64);
+        }
     });
 }
 
@@ -331,11 +345,13 @@ impl Hub {
         });
     }
 
-    fn flush(&mut self) -> Vec<(u64, Vec<u8>, metapb::Peer)> {
+    fn flush(&mut self) -> (Vec<u64>, Vec<SplitInfo>) {
         info!("reporter-split");
         let mut split_infos = Vec::default();
+        let mut top = BinaryHeap::with_capacity(10);
         for (region_id, region_info) in self.region_qps.iter() {
-            if (*region_info).qps > QPS_THRESHOLD {
+            let qps = (*region_info).qps;
+            if qps > QPS_THRESHOLD {
                 let recorder = self
                     .region_recorder
                     .entry(*region_id)
@@ -347,14 +363,20 @@ impl Hub {
                         "region_id" => *region_id,
                         "key" => std::str::from_utf8(&key).unwrap(),
                     );
-                    split_infos.push((*region_id, key, (*region_info).peer.clone()));
+                    let split_info = SplitInfo {
+                        region_id: *region_id,
+                        split_key: key,
+                        peer: (*region_info).peer.clone(),
+                    };
+                    split_infos.push(split_info);
                     self.region_recorder.remove(region_id);
                 }
+                top.push(qps);
             } else {
                 self.region_recorder.remove_entry(region_id);
             }
         }
         self.clear();
-        split_infos
+        (top.into_vec(), split_infos)
     }
 }

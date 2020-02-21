@@ -59,7 +59,7 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     // TODO: maybe we need to return a Result later?
     fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
 
-    fn split(&self, split_infos: Vec<(u64, Vec<u8>, metapb::Peer)>);
+    fn split(&self, split_infos: Vec<SplitInfo>);
 }
 
 impl FlowStatsReporter for Scheduler<Task> {
@@ -69,7 +69,7 @@ impl FlowStatsReporter for Scheduler<Task> {
         }
     }
 
-    fn split(&self, split_infos: Vec<(u64, Vec<u8>, metapb::Peer)>) {
+    fn split(&self, split_infos: Vec<SplitInfo>) {
         if let Err(e) = self.schedule(Task::ToAskSplit { split_infos }) {
             error!("Failed to send split infos"; "err" => ?e);
         }
@@ -80,6 +80,12 @@ pub trait DynamicConfig: Send + 'static {
     fn refresh(&mut self, cfg_client: &dyn ConfigClient);
     fn refresh_interval(&self) -> Duration;
     fn get(&self) -> String;
+}
+
+pub struct SplitInfo {
+    pub region_id: u64,
+    pub split_key: Vec<u8>,
+    pub peer: metapb::Peer,
 }
 
 /// Uses an asynchronous thread to tell PD something.
@@ -101,7 +107,7 @@ pub enum Task {
         callback: Callback<RocksEngine>,
     },
     ToAskSplit {
-        split_infos: Vec<(u64, Vec<u8>, metapb::Peer)>,
+        split_infos: Vec<SplitInfo>,
     },
     Heartbeat {
         term: u64,
@@ -887,13 +893,15 @@ impl<T: PdClient + ConfigClient> Runnable<Task> for Runner<T> {
                 callback,
             ),
             Task::ToAskSplit { split_infos } => {
-                for (id, split_key, peer) in split_infos {
-                    if let Ok(Some(region)) = self.pd_client.get_region_by_id(id).wait() {
+                for split_info in split_infos {
+                    if let Ok(Some(region)) =
+                        self.pd_client.get_region_by_id(split_info.region_id).wait()
+                    {
                         self.handle_ask_split(
                             handle,
                             region,
-                            split_key,
-                            peer,
+                            split_info.split_key,
+                            split_info.peer,
                             true,
                             Callback::None,
                         );
