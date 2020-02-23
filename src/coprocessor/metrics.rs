@@ -350,30 +350,30 @@ impl Hub {
         let mut top = BinaryHeap::with_capacity(10);
         for (region_id, region_info) in self.region_qps.iter() {
             let qps = (*region_info).qps;
-            if qps > QPS_THRESHOLD {
-                info!("start-qps";"qps"=>qps);
-                let recorder = self
-                    .region_recorder
-                    .entry(*region_id)
-                    .or_insert_with(build_recorder);
-                recorder.record(self.region_keys.get(region_id).unwrap());
-                let key = recorder.split_key();
-                if !key.is_empty() {
-                    info!("reporter-split";
-                        "region_id" => *region_id,
-                        "key" => std::str::from_utf8(&key).unwrap(),
-                    );
-                    let split_info = SplitInfo {
-                        region_id: *region_id,
-                        split_key: key,
-                        peer: (*region_info).peer.clone(),
-                    };
-                    split_infos.push(split_info);
-                    self.region_recorder.remove(region_id);
-                }
-            } else {
-                self.region_recorder.remove_entry(region_id);
-            }
+//            if qps > QPS_THRESHOLD {
+//                info!("start-qps";"qps"=>qps);
+//                let recorder = self
+//                    .region_recorder
+//                    .entry(*region_id)
+//                    .or_insert_with(build_recorder);
+//                recorder.record(self.region_keys.get(region_id).unwrap());
+//                let key = recorder.split_key();
+//                if !key.is_empty() {
+//                    info!("reporter-split";
+//                        "region_id" => *region_id,
+//                        "key" => std::str::from_utf8(&key).unwrap(),
+//                    );
+//                    let split_info = SplitInfo {
+//                        region_id: *region_id,
+//                        split_key: key,
+//                        peer: (*region_info).peer.clone(),
+//                    };
+//                    split_infos.push(split_info);
+//                    self.region_recorder.remove(region_id);
+//                }
+//            } else {
+//                self.region_recorder.remove_entry(region_id);
+//            }
             top.push(qps);
         }
         self.clear();
