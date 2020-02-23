@@ -58,7 +58,7 @@ lazy_static! {
         &["req", "cf", "tag"]
     )
     .unwrap();
-    pub static ref COPR_QPS_TOPN: IntCounterVec = register_int_counter_vec!(
+    pub static ref COPR_QPS_TOPN: GaugeVec = register_gauge_vec!(
         "tikv_coprocessor_qps_topn",
         "tikv_coprocessor_qps_topn",
         &["order"]
@@ -137,6 +137,14 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
             }
         }
 
+        let (top, split_infos) = m.hub.lock().unwrap().flush();
+        reporter.split(split_infos);
+        for i in 0..top.len() {
+            COPR_QPS_TOPN
+                .with_label_values(&[&i.to_string()])
+                .set(top[i] as f64);
+        }
+
         // Report PD metrics
         if m.local_cop_flow_stats.is_empty() {
             // Stats to report to PD is empty, ignore.
@@ -147,14 +155,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
         mem::swap(&mut read_stats, &mut m.local_cop_flow_stats);
 
         reporter.report_read_stats(read_stats);
-
-        let (top, split_infos) = m.hub.lock().unwrap().flush();
-        reporter.split(split_infos);
-        for i in 0..top.len() {
-            COPR_QPS_TOPN
-                .with_label_values(&[&i.to_string()])
-                .inc_by(top[i] as i64);
-        }
     });
 }
 
@@ -346,7 +346,6 @@ impl Hub {
     }
 
     fn flush(&mut self) -> (Vec<u64>, Vec<SplitInfo>) {
-        info!("reporter-split");
         let mut split_infos = Vec::default();
         let mut top = BinaryHeap::with_capacity(10);
         for (region_id, region_info) in self.region_qps.iter() {
@@ -377,6 +376,7 @@ impl Hub {
             }
         }
         self.clear();
+        info!("reporter-split";"qps_len"=>&top.len());
         (top.into_vec(), split_infos)
     }
 }
