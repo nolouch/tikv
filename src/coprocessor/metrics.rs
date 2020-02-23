@@ -189,7 +189,7 @@ pub fn tls_collect_qps(region_id: u64, peer: &metapb::Peer, start_key: &[u8], en
     });
 }
 
-const QPS_THRESHOLD: u64 = 2500;
+const QPS_THRESHOLD: u64 = 200;
 const DETECT_TIMES: u32 = 10;
 const DETECT_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -370,10 +370,10 @@ impl Hub {
                     split_infos.push(split_info);
                     self.region_recorder.remove(region_id);
                 }
-                top.push(qps);
             } else {
                 self.region_recorder.remove_entry(region_id);
             }
+            top.push(qps);
         }
         self.clear();
         info!("reporter-split";"qps_len"=>&top.len());
