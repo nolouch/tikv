@@ -376,7 +376,6 @@ impl Hub {
             top.push(qps);
         }
         self.clear();
-        info!("reporter-split";"qps_len"=>&top.len());
         (top.into_vec(), split_infos)
     }
 }
