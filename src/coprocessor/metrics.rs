@@ -351,6 +351,7 @@ impl Hub {
         for (region_id, region_info) in self.region_qps.iter() {
             let qps = (*region_info).qps;
             if qps > QPS_THRESHOLD {
+                info!("start-qps";"qps"=>qps);
                 let recorder = self
                     .region_recorder
                     .entry(*region_id)
