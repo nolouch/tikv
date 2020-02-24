@@ -243,7 +243,9 @@ fn build_recorder() -> Recorder {
 impl Recorder {
     fn record(&mut self, key_ranges: &[KeyRange]) {
         self.times += 1;
+        info!("start-record2";"key_ranges"=>key_ranges.len());
         for key_range in key_ranges.iter() {
+            info!("add-samples");
             self.count += 1;
             if self.samples.len() < 20 {
                 self.samples.push(build_sample(&key_range.start_key));
@@ -253,6 +255,7 @@ impl Recorder {
                     self.samples[i] = build_sample(&key_range.start_key);
                 }
             }
+            info!("end-samples");
             self.sample(key_range);
         }
     }
