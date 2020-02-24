@@ -201,9 +201,9 @@ pub struct Sample {
     pub right: i32,
 }
 
-fn build_sample(key: Vec<u8>) -> Sample {
+fn build_sample(key: &Vec<u8>) -> Sample {
     Sample {
-        key,
+        key:key.clone(),
         left: 0,
         contained: 0,
         right: 0,
@@ -242,30 +242,28 @@ fn build_recorder() -> Recorder {
 
 impl Recorder {
     fn record(&mut self, key_ranges: &[KeyRange]) {
-        let mut rng = rand::thread_rng();
         self.times += 1;
         for key_range in key_ranges.iter() {
             self.count += 1;
             if self.samples.len() < 20 {
-                self.samples.push(build_sample(key_range.start_key.clone()));
+                self.samples.push(build_sample(&key_range.start_key));
             } else {
-                let i = rng.gen_range(0, self.count) as usize;
+                let i = rand::thread_rng().gen_range(0, self.count) as usize;
                 if i < 20 {
-                    self.samples[i] = build_sample(key_range.start_key.clone());
+                    self.samples[i] = build_sample(&key_range.start_key);
                 }
             }
-            for mut sample in self.samples.iter_mut() {
-                let key = &sample.key;
-                if key.cmp(&key_range.start_key) == Ordering::Less {
-                    sample.left += 1;
-                } else if !key_range.end_key.is_empty()
-                    && key.cmp(&key_range.end_key) == Ordering::Greater
-                {
-                    sample.right += 1;
-                } else {
-                    sample.contained += 1;
-                }
-            }
+//            for mut sample in self.samples.iter_mut() {
+//                if sample.key.cmp(&key_range.start_key) == Ordering::Less {
+//                    sample.left += 1;
+//                } else if !key_range.end_key.is_empty()
+//                    && sample.key.cmp(&key_range.end_key) == Ordering::Greater
+//                {
+//                    sample.right += 1;
+//                } else {
+//                    sample.contained += 1;
+//                }
+//            }
         }
     }
 
@@ -358,9 +356,9 @@ impl Hub {
                     .region_recorder
                     .entry(*region_id)
                     .or_insert_with(build_recorder);
-                // info!("start-record";"qps"=>qps,"region_id"=>*region_id);
-                // recorder.record(self.region_keys.get(region_id).unwrap());
-                // info!("end-record";"qps"=>qps,"region_id"=>*region_id);
+                info!("start-record";"qps"=>qps,"region_id"=>*region_id);
+                recorder.record(self.region_keys.get(region_id).unwrap());
+                info!("end-record";"qps"=>qps,"region_id"=>*region_id);
                 let key = recorder.split_key();
                 if !key.is_empty() {
                     info!("reporter-split";
