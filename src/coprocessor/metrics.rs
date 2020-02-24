@@ -253,16 +253,27 @@ impl Recorder {
                     self.samples[i] = build_sample(&key_range.start_key);
                 }
             }
-            for mut sample in self.samples.iter_mut() {
-                if sample.key.cmp(&key_range.start_key) == Ordering::Less {
-                    (*sample).left += 1;
-                } else if !key_range.end_key.is_empty()
-                    && sample.key.cmp(&key_range.end_key) == Ordering::Greater
-                {
-                    (*sample).right += 1;
-                } else {
-                    (*sample).contained += 1;
-                }
+            self.sample(key_range);
+        }
+    }
+
+    fn sample(&mut self, key_range: &KeyRange) {
+        info!("start-sample";
+            "start"=>String::from_utf8(key_range.start_key.clone()).unwrap(),
+            "end"=>String::from_utf8(key_range.end_key.clone()).unwrap()
+        );
+        for mut sample in self.samples.iter_mut() {
+            if sample.key.cmp(&key_range.start_key) == Ordering::Less {
+                info!("left");
+                sample.left += 1;
+            } else if !key_range.end_key.is_empty()
+                && sample.key.cmp(&key_range.end_key) == Ordering::Greater
+            {
+                sample.right += 1;
+                info!("right");
+            } else {
+                sample.contained += 1;
+                info!("contained");
             }
         }
     }
@@ -276,7 +287,7 @@ impl Recorder {
         let mut best_score = 2.0;
         for index in 0..self.samples.len() {
             let sample = &self.samples[index];
-            if sample.contained + sample.left + sample.right < 10 {
+            if sample.contained + sample.left + sample.right < 100 {
                 continue;
             }
             let diff = (sample.left - sample.right) as f64;
@@ -307,7 +318,9 @@ fn build_region_info() -> RegionInfo {
 
 impl RegionInfo {
     fn update(&mut self, peer: &metapb::Peer) {
-        self.peer = peer.clone();
+        if self.peer != *peer {
+            self.peer = peer.clone();
+        }
         self.qps += 1
     }
 }
@@ -380,5 +393,50 @@ impl Hub {
         }
         self.clear();
         (top.into_vec(), split_infos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_recorder() {
+        let mut recorder = build_recorder();
+
+        let key_range = build_key_range("a".as_bytes(), "b".as_bytes());
+        recorder.record(&[key_range]);
+        assert_eq!(recorder.samples.len(), 1);
+        assert_eq!(recorder.samples[0].contained, 1);
+
+        let mut key_ranges: Vec<KeyRange> = Vec::new();
+
+        key_ranges.push(build_key_range("a".as_bytes(), "b".as_bytes()));
+        key_ranges.push(build_key_range("b".as_bytes(), "c".as_bytes()));
+        key_ranges.push(build_key_range("c".as_bytes(), "d".as_bytes()));
+        key_ranges.push(build_key_range("d".as_bytes(), "".as_bytes()));
+
+        for _ in 0..50 {
+            recorder.record(key_ranges.as_slice());
+        }
+
+        assert_eq!(recorder.samples.len(), 20);
+        assert_eq!(recorder.split_key(), "c".as_bytes());
+    }
+
+    #[test]
+    fn test_hub() {
+        let mut hub = build_hub();
+
+        for i in 0..100 {
+            for _ in 0..100 {
+                hub.add(1, &metapb::Peer::default(), "a".as_bytes(), "b".as_bytes());
+                hub.add(1, &metapb::Peer::default(), "b".as_bytes(), "".as_bytes());
+            }
+            let (_, split_infos) = hub.flush();
+            if (i+1) % DETECT_TIMES == 0 {
+                assert_eq!(split_infos.len(), 1);
+            }
+        }
     }
 }
