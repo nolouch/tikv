@@ -201,9 +201,9 @@ pub struct Sample {
     pub right: i32,
 }
 
-fn build_sample(key: &Vec<u8>) -> Sample {
+fn build_sample(key: &[u8]) -> Sample {
     Sample {
-        key:key.clone(),
+        key: key.to_owned(),
         left: 0,
         contained: 0,
         right: 0,
@@ -255,13 +255,13 @@ impl Recorder {
             }
             for mut sample in self.samples.iter_mut() {
                 if sample.key.cmp(&key_range.start_key) == Ordering::Less {
-                    sample.left += 1;
+                    (*sample).left += 1;
                 } else if !key_range.end_key.is_empty()
                     && sample.key.cmp(&key_range.end_key) == Ordering::Greater
                 {
-                    sample.right += 1;
+                    (*sample).right += 1;
                 } else {
-                    sample.contained += 1;
+                    (*sample).contained += 1;
                 }
             }
         }
