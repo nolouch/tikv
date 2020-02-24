@@ -15,6 +15,7 @@ use rand::Rng;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::time::{Duration, SystemTime};
+use txn_types::Key;
 
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
@@ -257,22 +258,19 @@ impl Recorder {
     }
 
     fn sample(&mut self, key_range: &KeyRange) {
-        info!("start-sample";
-            "start"=>String::from_utf8(key_range.start_key.clone()).unwrap(),
-            "end"=>String::from_utf8(key_range.end_key.clone()).unwrap()
-        );
+        //info!("start-sample";
+        //    "start"=>%key_range.start_key,
+        //    "end"=>%key_range.end_key,
+        //);
         for mut sample in self.samples.iter_mut() {
             if sample.key.cmp(&key_range.start_key) == Ordering::Less {
-                info!("left");
                 sample.left += 1;
             } else if !key_range.end_key.is_empty()
                 && sample.key.cmp(&key_range.end_key) == Ordering::Greater
             {
                 sample.right += 1;
-                info!("right");
             } else {
                 sample.contained += 1;
-                info!("contained");
             }
         }
     }
@@ -374,12 +372,12 @@ impl Hub {
                 let key = recorder.split_key();
                 if !key.is_empty() {
                     info!("reporter-split";
-                        "region_id" => *region_id,
-                        "key" => std::str::from_utf8(&key).unwrap(),
+                        "region_id" => region_id,
+                        "key" => %Key::from_raw(&key),
                     );
                     let split_info = SplitInfo {
                         region_id: *region_id,
-                        split_key: key,
+                        split_key: Key::from_raw(&key).into_encoded(),
                         peer: (*region_info).peer.clone(),
                     };
                     split_infos.push(split_info);
@@ -433,7 +431,7 @@ mod tests {
                 hub.add(1, &metapb::Peer::default(), "b".as_bytes(), "".as_bytes());
             }
             let (_, split_infos) = hub.flush();
-            if (i+1) % DETECT_TIMES == 0 {
+            if (i + 1) % DETECT_TIMES == 0 {
                 assert_eq!(split_infos.len(), 1);
             }
         }
