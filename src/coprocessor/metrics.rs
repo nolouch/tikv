@@ -136,13 +136,14 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                 }
             }
         }
-
-        let (top, split_infos) = m.hub.lock().unwrap().flush();
-        reporter.split(split_infos);
-        for i in 0..top.len() {
-            COPR_QPS_TOPN
-                .with_label_values(&[&i.to_string()])
-                .set(top[i] as f64);
+        {
+            let (top, split_infos) = m.hub.lock().unwrap().flush();
+            reporter.split(split_infos);
+            for i in 0..top.len() {
+                COPR_QPS_TOPN
+                    .with_label_values(&[&i.to_string()])
+                    .set(top[i] as f64);
+            }
         }
 
         // Report PD metrics
@@ -272,6 +273,7 @@ impl Recorder {
         if self.times < DETECT_TIMES {
             return vec![];
         }
+        info!("start-split");
         let mut best_index: i32 = -1;
         let mut best_score = 2.0;
         for index in 0..self.samples.len() {
@@ -341,7 +343,7 @@ impl Hub {
         self.region_keys.clear();
         self.region_qps.clear();
         self.region_recorder.retain(|_, recorder| {
-            recorder.create_time.elapsed().unwrap() < DETECT_INTERVAL * DETECT_TIMES *10
+            recorder.create_time.elapsed().unwrap() < DETECT_INTERVAL * DETECT_TIMES * 10
         });
     }
 
@@ -356,9 +358,9 @@ impl Hub {
                     .region_recorder
                     .entry(*region_id)
                     .or_insert_with(build_recorder);
-                info!("start-record";"qps"=>qps,"region_id"=>*region_id);
-                recorder.record(self.region_keys.get(region_id).unwrap());
-                info!("end-record";"qps"=>qps,"region_id"=>*region_id);
+                // info!("start-record";"qps"=>qps,"region_id"=>*region_id);
+                // recorder.record(self.region_keys.get(region_id).unwrap());
+                // info!("end-record";"qps"=>qps,"region_id"=>*region_id);
                 let key = recorder.split_key();
                 if !key.is_empty() {
                     info!("reporter-split";
