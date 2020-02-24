@@ -253,17 +253,17 @@ impl Recorder {
                     self.samples[i] = build_sample(&key_range.start_key);
                 }
             }
-//            for mut sample in self.samples.iter_mut() {
-//                if sample.key.cmp(&key_range.start_key) == Ordering::Less {
-//                    sample.left += 1;
-//                } else if !key_range.end_key.is_empty()
-//                    && sample.key.cmp(&key_range.end_key) == Ordering::Greater
-//                {
-//                    sample.right += 1;
-//                } else {
-//                    sample.contained += 1;
-//                }
-//            }
+            for mut sample in self.samples.iter_mut() {
+                if sample.key.cmp(&key_range.start_key) == Ordering::Less {
+                    sample.left += 1;
+                } else if !key_range.end_key.is_empty()
+                    && sample.key.cmp(&key_range.end_key) == Ordering::Greater
+                {
+                    sample.right += 1;
+                } else {
+                    sample.contained += 1;
+                }
+            }
         }
     }
 
