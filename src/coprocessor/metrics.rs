@@ -89,7 +89,7 @@ pub struct CopLocalMetrics {
     pub local_copr_req_wait_time: LocalHistogramVec,
     pub local_copr_scan_keys: LocalHistogramVec,
     pub local_copr_rocksdb_perf_counter: LocalIntCounterVec,
-    hub: Arc<Mutex<Hub>>,
+    hub: Hub,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_cop_flow_stats: HashMap<u64, FlowStatistics>,
 }
@@ -112,7 +112,7 @@ thread_local! {
             local_cop_flow_stats:
                 HashMap::default(),
             hub:
-                Arc::new(Mutex::new(build_hub())),
+                build_hub(),
         }
     );
 }
@@ -137,7 +137,7 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
             }
         }
         {
-            let (top, split_infos) = m.hub.lock().unwrap().flush();
+            let (top, split_infos) = m.hub.flush();
             reporter.split(split_infos);
             for i in 0..top.len() {
                 COPR_QPS_TOPN
@@ -183,10 +183,7 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
 pub fn tls_collect_qps(region_id: u64, peer: &metapb::Peer, start_key: &[u8], end_key: &[u8]) {
     TLS_COP_METRICS.with(|m| {
         let m = m.borrow_mut();
-        m.hub
-            .lock()
-            .unwrap()
-            .add(region_id, peer, start_key, end_key);
+        m.hub.add(region_id, peer, start_key, end_key);
     });
 }
 
