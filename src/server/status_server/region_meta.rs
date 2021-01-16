@@ -12,6 +12,14 @@ pub enum RaftProgressState {
     Snapshot,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SSTStatus {
+    pub name: Vec<u8>,
+    pub store_id: u64,
+    pub start_key: Vec<u8>,
+    pub end_key: Vec<u8>,
+}
+
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct RaftProgress {
     pub matched: u64,

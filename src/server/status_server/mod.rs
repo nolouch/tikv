@@ -598,6 +598,44 @@ where
     E: KvEngine,
     R: 'static + Send + CasualRouter<E> + Clone,
 {
+    pub async fn dump_engine_sst_meta(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        fn err_resp(
+            status_code: StatusCode,
+            msg: impl Into<Body>,
+        ) -> hyper::Result<Response<Body>> {
+            Ok(StatusServer::err_response(status_code, msg))
+        }
+
+        let mut meta: Vec<region_meta::SSTStatus> = Vec::new();
+        let sst1 = region_meta::SSTStatus {
+            name: b"20209".to_vec(),
+            start_key: b"t01".to_vec(),
+            end_key: b"t02".to_vec(),
+            store_id: 20,
+        };
+        meta.push(sst1);
+
+        let body = match serde_json::to_vec(&meta) {
+            Ok(body) => body,
+            Err(err) => {
+                return Ok(StatusServer::err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("fails to json: {}", err),
+                ))
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -746,6 +784,9 @@ where
                             }
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_rsperf_to_resp(req).await
+                            }
+                            (Method::POST, "/engine/sst_status") => {
+                                Self::dump_engine_sst_meta(req).await
                             }
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
