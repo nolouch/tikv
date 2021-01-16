@@ -150,6 +150,8 @@ struct TiKVServer<ER: RaftEngine> {
     store_path: PathBuf,
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     engines: Option<TiKVEngines<ER>>,
+    // hack way
+    rocks_engine: Option<RocksEngine>,
     servers: Option<Servers<ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
@@ -228,6 +230,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             store_path,
             encryption_key_manager: None,
             engines: None,
+            rocks_engine: None,
             servers: None,
             region_info_accessor,
             coprocessor_host,
@@ -855,12 +858,14 @@ impl<ER: RaftEngine> TiKVServer<ER> {
         // Create a status server.
         let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
+            let engine = self.rocks_engine.as_ref().unwrap().clone();
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
                 Some(self.pd_client.clone()),
                 self.cfg_controller.take().unwrap(),
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
+                engine,
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -934,6 +939,7 @@ impl TiKVServer<RocksEngine> {
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
         let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
+        self.rocks_engine = Some(kv_engine.clone());
         let mut raft_engine = RocksEngine::from_db(Arc::new(raft_engine));
         let shared_block_cache = block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);

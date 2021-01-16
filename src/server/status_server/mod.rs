@@ -48,6 +48,7 @@ use tikv_util::logger::set_log_level;
 use tikv_util::metrics::dump;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
+use engine_rocks::RocksEngine;
 pub mod region_meta;
 
 mod profiler_guard {
@@ -103,6 +104,7 @@ pub struct StatusServer<E, R> {
     addr: Option<SocketAddr>,
     advertise_addr: Option<String>,
     pd_client: Option<Arc<RpcClient>>,
+    rocks_engine: RocksEngine,
     cfg_controller: ConfigController,
     router: R,
     security_config: Arc<SecurityConfig>,
@@ -158,6 +160,7 @@ where
         cfg_controller: ConfigController,
         security_config: Arc<SecurityConfig>,
         router: R,
+        rocks_engine: RocksEngine,
     ) -> Result<Self> {
         let thread_pool = Builder::new()
             .threaded_scheduler()
@@ -179,6 +182,7 @@ where
             addr: None,
             advertise_addr: None,
             pd_client,
+            rocks_engine,
             cfg_controller,
             router,
             security_config,
@@ -598,7 +602,10 @@ where
     E: KvEngine,
     R: 'static + Send + CasualRouter<E> + Clone,
 {
-    pub async fn dump_engine_sst_meta(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    pub async fn dump_engine_sst_meta(
+        engine: RocksEngine,
+        req: Request<Body>,
+    ) -> hyper::Result<Response<Body>> {
         fn err_resp(
             status_code: StatusCode,
             msg: impl Into<Body>,
@@ -624,6 +631,10 @@ where
                 ))
             }
         };
+        let db = engine.as_inner();
+
+        let handle = db.cf_handle("default").unwrap();
+        db.get_cf_ssts_metadata(handle, b"", b"zz");
         match Response::builder()
             .header("content-type", "application/json")
             .body(hyper::Body::from(body))
@@ -728,12 +739,14 @@ where
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
+        let engine = self.rocks_engine.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
             let security_config = security_config.clone();
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
+            let engine = engine.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -741,6 +754,7 @@ where
                     let security_config = security_config.clone();
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
+                    let engine = engine.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -785,8 +799,8 @@ where
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_rsperf_to_resp(req).await
                             }
-                            (Method::POST, "/engine/sst_status") => {
-                                Self::dump_engine_sst_meta(req).await
+                            (Method::GET, "/engine/sst_status") => {
+                                Self::dump_engine_sst_meta(engine.clone(), req).await
                             }
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
