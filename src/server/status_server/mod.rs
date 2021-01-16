@@ -606,38 +606,20 @@ where
         engine: RocksEngine,
         req: Request<Body>,
     ) -> hyper::Result<Response<Body>> {
-        fn err_resp(
-            status_code: StatusCode,
-            msg: impl Into<Body>,
-        ) -> hyper::Result<Response<Body>> {
-            Ok(StatusServer::err_response(status_code, msg))
-        }
-
-        let mut meta: Vec<region_meta::SSTStatus> = Vec::new();
-        let sst1 = region_meta::SSTStatus {
-            name: b"20209".to_vec(),
-            start_key: b"t01".to_vec(),
-            end_key: b"t02".to_vec(),
-            store_id: 20,
-        };
-        meta.push(sst1);
-
-        let body = match serde_json::to_vec(&meta) {
-            Ok(body) => body,
-            Err(err) => {
-                return Ok(StatusServer::err_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("fails to json: {}", err),
-                ))
-            }
-        };
         let db = engine.as_inner();
-
-        let handle = db.cf_handle("default").unwrap();
-        db.get_cf_ssts_metadata(handle, b"", b"zz");
+        let mut cf = "default";
+        if let Some(query) = req.uri().query() {
+            let kvs: Vec<&str> = query.split('=').collect();
+            if kvs.len() == 2 && kvs[0] == "cf" {
+                cf = kvs[1];
+            }
+        }
+        let handle = db.cf_handle(cf).unwrap();
+        let res = db.get_cf_ssts_metadata(handle, b"", b"zz").unwrap();
+        info!("enter sst meta {:?}, cf: {}", res, cf);
         match Response::builder()
             .header("content-type", "application/json")
-            .body(hyper::Body::from(body))
+            .body(hyper::Body::from(res.to_vec()))
         {
             Ok(resp) => Ok(resp),
             Err(err) => Ok(StatusServer::err_response(
@@ -783,7 +765,7 @@ where
                                 "certificate role error",
                             ));
                         }
-
+                        println!("{}", path);
                         match (method, path.as_ref()) {
                             (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
                             (Method::GET, "/status") => Ok(Response::default()),
@@ -794,23 +776,24 @@ where
                                 Self::get_config(req, &cfg_controller).await
                             }
                             (Method::POST, "/config") => {
+                                //Self::dump_engine_sst_meta(engine.clone(), req).await
                                 Self::update_config(cfg_controller.clone(), req).await
                             }
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_rsperf_to_resp(req).await
                             }
-                            (Method::GET, "/engine/sst_status") => {
-                                Self::dump_engine_sst_meta(engine.clone(), req).await
-                            }
                             (Method::GET, path) if path.starts_with("/region") => {
                                 Self::dump_region_meta(req, router).await
+                            }
+                            (Method::GET, path) if path.starts_with("/engine/sst_status") => {
+                                Self::dump_engine_sst_meta(engine.clone(), req).await
                             }
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
                             _ => Ok(StatusServer::err_response(
                                 StatusCode::NOT_FOUND,
-                                "path not found",
+                                format!("path not found {}", path),
                             )),
                         }
                     }
