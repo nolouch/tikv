@@ -616,12 +616,12 @@ where
             }
         }
         let handle = db.cf_handle(cf).unwrap();
-
         let res = db.get_cf_ssts_metadata(handle, MIN_KEY, MAX_KEY).unwrap();
-        info!("enter sst meta {:?}, cf: {}", res, cf);
+        let body = std::str::from_utf8(res).unwrap().to_string();
+        info!("enter sst meta {:?}, cf: {}", body, cf);
         match Response::builder()
             .header("content-type", "application/json")
-            .body(hyper::Body::from(res.to_vec()))
+            .body(hyper::Body::from(body))
         {
             Ok(resp) => Ok(resp),
             Err(err) => Ok(StatusServer::err_response(
