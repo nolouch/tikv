@@ -596,7 +596,8 @@ where
         );
     }
 }
-
+pub const MIN_KEY: &[u8] = &[];
+pub const MAX_KEY: &[u8] = &[0xFF];
 impl<E, R> StatusServer<E, R>
 where
     E: KvEngine,
@@ -615,7 +616,8 @@ where
             }
         }
         let handle = db.cf_handle(cf).unwrap();
-        let res = db.get_cf_ssts_metadata(handle, b"", b"zz").unwrap();
+
+        let res = db.get_cf_ssts_metadata(handle, MIN_KEY, MAX_KEY).unwrap();
         info!("enter sst meta {:?}, cf: {}", res, cf);
         match Response::builder()
             .header("content-type", "application/json")
