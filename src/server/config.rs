@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::{cmp, i32, isize};
 
 use super::Result;
@@ -7,7 +8,8 @@ use grpcio::CompressionAlgorithms;
 use regex::Regex;
 
 use collections::HashMap;
-use tikv_util::config::{self, ReadableDuration, ReadableSize};
+use configuration::{ConfigChange, ConfigManager, Configuration};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack};
 use tikv_util::sys::sys_quota::SysQuota;
 
 pub use crate::storage::config::Config as StorageConfig;
@@ -50,84 +52,118 @@ pub enum GrpcCompressionType {
 }
 
 /// Configuration for the `server` module.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[serde(skip)]
+    #[config(skip)]
     pub cluster_id: u64,
 
     // Server listening address.
+    #[config(skip)]
     pub addr: String,
 
     // Server advertise listening address for outer communication.
     // If not set, we will use listening address instead.
+    #[config(skip)]
     pub advertise_addr: String,
 
     // These are related to TiKV status.
+    #[config(skip)]
     pub status_addr: String,
 
     // Status server's advertise listening address for outer communication.
     // If not set, the status server's listening address will be used.
+    #[config(skip)]
     pub advertise_status_addr: String,
 
+    #[config(skip)]
     pub status_thread_pool_size: usize,
 
+    #[config(skip)]
     pub max_grpc_send_msg_len: i32,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
+    #[config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
+    #[config(skip)]
     pub grpc_concurrency: usize,
+    #[config(skip)]
     pub grpc_concurrent_stream: i32,
+    #[config(skip)]
     pub grpc_raft_conn_num: usize,
+    #[config(skip)]
     pub grpc_memory_pool_quota: ReadableSize,
+    #[config(skip)]
     pub grpc_stream_initial_window_size: ReadableSize,
+    #[config(skip)]
     pub grpc_keepalive_time: ReadableDuration,
+    #[config(skip)]
     pub grpc_keepalive_timeout: ReadableDuration,
     /// How many snapshots can be sent concurrently.
     pub concurrent_send_snap_limit: usize,
     /// How many snapshots can be recv concurrently.
     pub concurrent_recv_snap_limit: usize,
+    #[config(skip)]
     pub end_point_recursion_limit: u32,
+    #[config(skip)]
     pub end_point_stream_channel_size: usize,
+    #[config(skip)]
     pub end_point_batch_row_limit: usize,
+    #[config(skip)]
     pub end_point_stream_batch_row_limit: usize,
+    #[config(skip)]
     pub end_point_enable_batch_if_possible: bool,
+    #[config(skip)]
     pub end_point_request_max_handle_duration: ReadableDuration,
+    #[config(skip)]
     pub end_point_max_concurrency: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
+    #[config(skip)]
     pub stats_concurrency: usize,
+    #[config(skip)]
     pub heavy_load_threshold: usize,
+    #[config(skip)]
     pub heavy_load_wait_duration: ReadableDuration,
+    #[config(skip)]
     pub enable_request_batch: bool,
+    #[config(skip)]
     pub background_thread_count: usize,
     // If handle time is larger than the threshold, it will print slow log in end point.
+    #[config(skip)]
     pub end_point_slow_log_threshold: ReadableDuration,
     /// Max connections per address for forwarding request.
+    #[config(skip)]
     pub forward_max_connections_per_address: usize,
 
     // Test only.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub raft_client_backoff_step: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
+    #[config(skip)]
     pub labels: HashMap<String, String>,
 
     // deprecated. use readpool.coprocessor.xx_concurrency.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub end_point_concurrency: Option<usize>,
 
     // deprecated. use readpool.coprocessor.stack_size.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub end_point_stack_size: Option<ReadableSize>,
 
     // deprecated. use readpool.coprocessor.max_tasks_per_worker_xx.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub end_point_max_tasks: Option<usize>,
 }
 
@@ -292,6 +328,30 @@ impl Config {
             GrpcCompressionType::Deflate => CompressionAlgorithms::GRPC_COMPRESS_DEFLATE,
             GrpcCompressionType::Gzip => CompressionAlgorithms::GRPC_COMPRESS_GZIP,
         }
+    }
+}
+
+pub struct ServerConfigManager(pub Arc<VersionTrack<Config>>);
+
+impl ConfigManager for ServerConfigManager {
+    fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        {
+            let change = c.clone();
+            self.0.update(move |cfg: &mut Config| cfg.update(change));
+        }
+        info!(
+        "server config chagned";
+        "change" => ?c,
+        );
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for ServerConfigManager {
+    type Target = Arc<VersionTrack<Config>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

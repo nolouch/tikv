@@ -25,6 +25,7 @@ use file_system::{IOType, WithIOType};
 use raftstore::router::RaftStoreRouter;
 use raftstore::store::{GenericSnapshot, SnapEntry, SnapKey, SnapManager};
 use security::SecurityManager;
+use tikv_util::config::VersionTrack;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
@@ -307,7 +308,7 @@ where
     pool: Runtime,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
-    cfg: Arc<Config>,
+    cfg: Arc<VersionTrack<Config>>,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
     engine: PhantomData<E>,
@@ -323,7 +324,7 @@ where
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
-        cfg: Arc<Config>,
+        cfg: Arc<VersionTrack<Config>>,
     ) -> Runner<E, R> {
         Runner {
             env,
@@ -357,13 +358,14 @@ where
         match task {
             Task::Recv { stream, sink } => {
                 let task_num = self.recving_count.load(Ordering::SeqCst);
-                if task_num >= self.cfg.concurrent_recv_snap_limit {
+                if task_num >= self.cfg.value().concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
                     let status = RpcStatus::new(
                         RpcStatusCode::RESOURCE_EXHAUSTED,
                         Some(format!(
                             "the number of received snapshot tasks {} exceeded the limitation {}",
-                            task_num, self.cfg.concurrent_recv_snap_limit
+                            task_num,
+                            self.cfg.value().concurrent_recv_snap_limit
                         )),
                     );
                     self.pool.spawn(sink.fail(status));
@@ -386,7 +388,8 @@ where
             }
             Task::Send { addr, msg, cb } => {
                 fail_point!("send_snapshot");
-                if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
+                if self.sending_count.load(Ordering::SeqCst)
+                    >= self.cfg.value().concurrent_send_snap_limit
                 {
                     warn!(
                         "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
@@ -403,7 +406,14 @@ where
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
 
-                let send_task = send_snap(env, mgr, security_mgr, &self.cfg, &addr, msg);
+                let send_task = send_snap(
+                    env,
+                    mgr,
+                    security_mgr,
+                    &self.cfg.value().clone(),
+                    &addr,
+                    msg,
+                );
                 let task = async move {
                     let res = match send_task {
                         Err(e) => Err(e),
