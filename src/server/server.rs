@@ -473,7 +473,7 @@ mod tests {
         gc_worker.start().unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
-        let cfg = Arc::new(cfg);
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
         let cop_read_pool = ReadPool::from(readpool_impl::build_read_pool_for_test(
@@ -481,7 +481,7 @@ mod tests {
             storage.get_engine(),
         ));
         let cop = coprocessor::Endpoint::new(
-            &cfg,
+            &cfg.value().clone(),
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
             PerfLevel::EnableCount,
