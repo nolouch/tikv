@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Debug, Formatter};
-
-use engine_traits::{RaftEngine, RaftLogBatch};
+use std::sync::{ atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}}
+use engine_traits::{RaftEngine, RaftLogBatch, KvEngine};
 use kvproto::{
     metapb::{self, Region},
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
@@ -14,11 +14,21 @@ use raft::{
 use raftstore::store::{
     util::{self, find_peer},
     EntryStorage, RaftlogFetchTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    SnapState, fsm::GenSnapTask,
 };
+
+use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
+
+
 use slog::{o, Logger};
 use tikv_util::{box_err, worker::Scheduler};
 
 use crate::{Error, Result};
+
+
+// Retry count
+const MAX_SNAP_TRY_CNT: usize = 5;
+
 
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();
@@ -50,11 +60,19 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
 /// A storage for raft.
 ///
 /// It's similar to `PeerStorage` in v1.
-pub struct Storage<ER> {
+pub struct Storage<EK,ER> 
+where
+    EK: KvEngine,
+{
     entry_storage: EntryStorage<ER>,
     peer: metapb::Peer,
     region_state: RegionLocalState,
     logger: Logger,
+
+    snap_state: RefCell<SnapState>,
+    gen_snap_task: RefCell<Option<GenSnapTask>>,
+    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    snap_tried_cnt: RefCell<usize>,
 }
 
 impl<ER> Debug for Storage<ER> {
@@ -239,7 +257,93 @@ impl<ER: RaftEngine> raft::Storage for Storage<ER> {
     }
 
     fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
-        unimplemented!()
+        let mut snap_state = self.snap_state.borrow_mut();
+        let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
+
+        let mut tried = false;
+        let mut last_canceled = false;
+        if let SnapState::Generating {
+            ref canceled,
+            ref receiver,
+            ..
+        } = *snap_state
+        {
+            tried = true;
+            last_canceled = canceled.load(Ordering::SeqCst);
+            match receiver.try_recv() {
+                Err(TryRecvError::Empty) => {
+                    return Err(raft::Error::Store(
+                        raft::StorageError::SnapshotTemporarilyUnavailable,
+                    ));
+                }
+                Ok(s) if !last_canceled => {
+                    *snap_state = SnapState::Relax;
+                    *tried_cnt = 0;
+                    if self.validate_snap(&s, request_index) {
+                        return Ok(s);
+                    }
+                }
+                Err(TryRecvError::Disconnected) | Ok(_) => {
+                    *snap_state = SnapState::Relax;
+                    warn!(
+                        "failed to try generating snapshot";
+                        "region_id" => self.region.get_id(),
+                        "peer_id" => self.peer_id,
+                        "times" => *tried_cnt,
+                        "request_peer" => to,
+                    );
+                }
+            }
+        }
+
+        if SnapState::Relax != *snap_state {
+            panic!("{} unexpected state: {:?}", self.tag, *snap_state);
+        }
+
+        if *tried_cnt >= MAX_SNAP_TRY_CNT {
+            let cnt = *tried_cnt;
+            *tried_cnt = 0;
+            return Err(raft::Error::Store(box_err!(
+                "failed to get snapshot after {} times",
+                cnt
+            )));
+        }
+        if !tried || !last_canceled {
+            *tried_cnt += 1;
+        }
+
+        info!(
+            "requesting snapshot";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "request_index" => request_index,
+            "request_peer" => to,
+        );
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let canceled = Arc::new(AtomicBool::new(false));
+        let index = Arc::new(AtomicU64::new(0));
+        *snap_state = SnapState::Generating {
+            canceled: canceled.clone(),
+            index: index.clone(),
+            receiver,
+        };
+
+        let store_id = self
+            .region()
+            .get_peers()
+            .iter()
+            .find(|p| p.id == to)
+            .map(|p| p.store_id)
+            .unwrap_or(0);
+        let task = GenSnapTask::new(self.region_state().get_region().get_id(), index, canceled, sender, store_id);
+
+        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
+        assert!(gen_snap_task.is_none());
+        *gen_snap_task = Some(task);
+        Err(raft::Error::Store(
+            raft::StorageError::SnapshotTemporarilyUnavailable,
+        ))
     }
 }
 
