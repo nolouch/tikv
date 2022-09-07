@@ -162,7 +162,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,
-                "{:?}",
+                "Tick {:?}",
                 tick
             },
             PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),

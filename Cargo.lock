@@ -4215,6 +4215,7 @@ dependencies = [
  "time",
  "tracker",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]

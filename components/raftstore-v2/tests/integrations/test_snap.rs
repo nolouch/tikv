@@ -21,20 +21,17 @@ fn test_basic_generate_snapshot() {
 
     let router = cluster.router(0);
     let mut raft_msg = RaftMessage::default();
-    raft_msg.set_region_id(2);
-    raft_msg.set_to_peer(new_peer(1, 3));
-    //  raft_msg.set_
+    raft_msg.set_region_id(3);
+    raft_msg.set_to_peer(new_peer(1, 4));
     let epoch = raft_msg.mut_region_epoch();
     epoch.set_version(INIT_EPOCH_VER);
     epoch.set_conf_ver(INIT_EPOCH_CONF_VER);
 
     let raft_message = raft_msg.mut_message();
     raft_message.set_msg_type(raft::prelude::MessageType::MsgAppendResponse);
-    raft_message.set_from(3);
-    raft_message.set_term(5);
-
-    let peer_msg = PeerMsg::RaftMessage(Box::new(raft_msg));
-    router.send(2, peer_msg).unwrap();
+    raft_message.set_from(6);
+    raft_message.set_term(6);
+    router.send_raft_message(Box::new(raft_msg)).unwrap();
     println!("Hidden output");
-    thread::sleep(std::time::Duration::from_secs(3));
+    thread::sleep(std::time::Duration::from_secs(3600));
 }

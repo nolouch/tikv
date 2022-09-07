@@ -13,12 +13,13 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
 };
 
+use collections::HashMap;
 use crossbeam::channel::{self, Receiver, Sender};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
@@ -33,6 +34,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use pd_client::{PdClient, RpcClient};
+use raft::eraftpb::MessageType;
 use raftstore::store::{
     region_meta::RegionMeta, util::new_peer, Config, Transport, INIT_EPOCH_CONF_VER,
     INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
@@ -46,7 +48,10 @@ use raftstore_v2::{
 use slog::{o, Logger};
 use tempfile::{TempDir, TempPath};
 use test_pd::mocker::Service;
-use tikv_util::config::{ReadableDuration, VersionTrack};
+use tikv_util::{
+    box_err,
+    config::{ReadableDuration, VersionTrack},
+};
 
 mod test_basic_write;
 mod test_life;
@@ -103,7 +108,7 @@ struct RunningState {
     factory: Arc<TestTabletFactoryV2>,
     system: Option<StoreSystem<KvTestEngine, RaftTestEngine>>,
     cfg: Arc<VersionTrack<Config>>,
-    transport: TestTransport,
+    transport: TestNodeTransport,
     logger: Logger,
 }
 
@@ -113,6 +118,7 @@ struct ClusterBuilder {
     raft_engines: Vec<RaftTestEngine>,
     store_ids: Vec<u64>,
     paths: Vec<Arc<TempDir>>,
+    trans: ChannelTransport,
 }
 
 impl ClusterBuilder {
@@ -126,6 +132,7 @@ impl ClusterBuilder {
             raft_engines: vec![],
             store_ids: vec![],
             paths: vec![],
+            trans: ChannelTransport::default(),
         };
         for _ in 1..=n {
             let logger = slog_global::borrow_global().new(o!());
@@ -154,22 +161,23 @@ impl ClusterBuilder {
             nodes: vec![],
             receivers: vec![],
             routers: vec![],
+            trans: self.trans.clone(),
         };
 
-        for (i, _store_id) in self.store_ids.iter().enumerate() {
-            // vars
+        for (i, store_id) in self.store_ids.iter().enumerate() {
+            // init the config
             let logger = slog_global::borrow_global().new(o!());
             let path = self.paths[i].path();
-            let (tx, rx) = new_test_transport();
+            let node_trans = TestNodeTransport::new(self.trans.clone());
             let pd_client_inner = test_pd::util::new_client(self.pd_server.bind_addrs(), None);
             let raft_engine = self.raft_engines[i].clone();
-            // init
+            // create runing state
             let (router, state) = RunningState::new_with_engine(
                 &pd_client_inner,
                 path,
                 raft_engine,
                 cfg.clone(),
-                tx,
+                node_trans,
                 &logger,
             );
             let node = TestNode {
@@ -178,8 +186,13 @@ impl ClusterBuilder {
                 logger,
                 path: self.paths[i].clone(),
             };
+            self.trans
+                .core
+                .lock()
+                .unwrap()
+                .insert(*store_id, router.clone());
             cluster.nodes.push(node);
-            cluster.receivers.push(rx);
+            // cluster.receivers.push(rx);
             cluster.routers.push(router)
         }
         cluster
@@ -193,12 +206,13 @@ impl ClusterBuilder {
         region.set_end_key(keys::EMPTY_KEY.to_vec());
         region.mut_region_epoch().set_version(INIT_EPOCH_VER);
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-        for (i, store_id) in self.store_ids.iter().enumerate() {
+        for store_id in self.store_ids.iter() {
             let peer_id = pd_client.alloc_id().unwrap();
             let peer = new_peer(store_id.to_owned(), peer_id);
             region.mut_peers().push(peer.clone());
-            // persist to raft engine, likes bootstrap with restart
-            let raft_engine = &self.raft_engines[i];
+        }
+
+        for raft_engine in self.raft_engines.iter() {
             let mut wb = raft_engine.log_batch(10);
             wb.put_prepare_bootstrap_region(&region).unwrap();
             write_initial_states(&mut wb, region.clone()).unwrap();
@@ -212,7 +226,7 @@ impl RunningState {
         pd_client: &RpcClient,
         path: &Path,
         cfg: Arc<VersionTrack<Config>>,
-        transport: TestTransport,
+        transport: TestNodeTransport,
         logger: &Logger,
     ) -> (TestRouter, Self) {
         let cf_opts = ALL_CFS
@@ -245,7 +259,7 @@ impl RunningState {
         path: &Path,
         raft_engine: RaftTestEngine,
         cfg: Arc<VersionTrack<Config>>,
-        transport: TestTransport,
+        transport: TestNodeTransport,
         logger: &Logger,
     ) -> (TestRouter, Self) {
         let cf_opts = ALL_CFS
@@ -338,7 +352,7 @@ impl TestNode {
         }
     }
 
-    fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
+    fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestNodeTransport) -> TestRouter {
         let (router, state) =
             RunningState::new(&self.pd_client, self.path.path(), cfg, trans, &self.logger);
         self.running_state = Some(state);
@@ -368,32 +382,67 @@ impl Drop for TestNode {
     }
 }
 
-#[derive(Clone)]
-pub struct TestTransport {
-    tx: Sender<RaftMessage>,
-    flush_cnt: Arc<AtomicUsize>,
+#[derive(Clone, Default)]
+pub struct ChannelTransport {
+    core: Arc<Mutex<HashMap<u64, TestRouter>>>,
 }
 
-fn new_test_transport() -> (TestTransport, Receiver<RaftMessage>) {
-    let (tx, rx) = channel::unbounded();
-    let flush_cnt = Default::default();
-    (TestTransport { tx, flush_cnt }, rx)
-}
-
-impl Transport for TestTransport {
+impl Transport for ChannelTransport {
     fn send(&mut self, msg: RaftMessage) -> raftstore_v2::Result<()> {
-        let _ = self.tx.send(msg);
+        // let from_store = msg.get_from_peer().get_store_id();
+        let to_store = msg.get_to_peer().get_store_id();
+        let core = self.core.lock().unwrap();
+        match core.get(&to_store) {
+            Some(h) => {
+                h.send_raft_message(Box::new(msg))?;
+                Ok(())
+            }
+            _ => Err(box_err!("missing sender for store {}", to_store)),
+        }
+    }
+
+    fn set_store_allowlist(&mut self, _allowlist: Vec<u64>) {
+        unimplemented!();
+    }
+
+    fn need_flush(&self) -> bool {
+        false
+    }
+
+    fn flush(&mut self) {}
+}
+
+#[derive(Clone)]
+pub struct TestNodeTransport {
+    // tx: Sender<RaftMessage>,
+    flush_cnt: Arc<AtomicUsize>,
+    ch: ChannelTransport,
+}
+
+impl TestNodeTransport {
+    pub fn new(ch: ChannelTransport) -> Self {
+        Self {
+            flush_cnt: Default::default(),
+            ch,
+        }
+    }
+}
+
+impl Transport for TestNodeTransport {
+    fn send(&mut self, msg: RaftMessage) -> raftstore_v2::Result<()> {
+        let _ = self.ch.send(msg);
         Ok(())
     }
 
     fn set_store_allowlist(&mut self, _stores: Vec<u64>) {}
 
     fn need_flush(&self) -> bool {
-        !self.tx.is_empty()
+        self.ch.need_flush()
     }
 
     fn flush(&mut self) {
         self.flush_cnt.fetch_add(1, Ordering::SeqCst);
+        self.ch.flush();
     }
 }
 
@@ -406,7 +455,7 @@ fn v2_default_config() -> Config {
 
 /// Disable all ticks, so test case can schedule manually.
 fn disable_all_auto_ticks(cfg: &mut Config) {
-    cfg.raft_base_tick_interval = ReadableDuration::ZERO;
+    cfg.raft_base_tick_interval = ReadableDuration(Duration::from_millis(10));
     cfg.raft_log_gc_tick_interval = ReadableDuration::ZERO;
     cfg.raft_log_compact_sync_interval = ReadableDuration::ZERO;
     cfg.raft_engine_purge_interval = ReadableDuration::ZERO;
@@ -434,6 +483,7 @@ struct Cluster {
     nodes: Vec<TestNode>,
     receivers: Vec<Receiver<RaftMessage>>,
     routers: Vec<TestRouter>,
+    trans: ChannelTransport,
 }
 
 impl Default for Cluster {

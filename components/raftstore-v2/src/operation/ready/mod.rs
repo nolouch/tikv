@@ -25,7 +25,10 @@ use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::Message as _;
-use raft::{eraftpb, Ready};
+use raft::{
+    eraftpb::{self, MessageType},
+    Ready,
+};
 use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, info, trace, warn};
 
@@ -110,9 +113,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // ranges with other peers.
         self.insert_peer_cache(msg.take_from_peer());
         let r_msg = msg.take_message();
-        println!("raft step msg {:?}", r_msg);
         if let Err(e) = self.raft_group_mut().step(r_msg) {
-            println!("raft step msg err {:?}", e);
             error!(self.logger, "raft step error"; "err" => ?e);
         }
 
@@ -206,6 +207,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "msg_size" => msg.get_message().compute_size(),
             "to" => to_peer_id,
         );
+        // TODO: remove
+        if msg_type == MessageType::MsgSnapshot {
+            println!("got snapshot {:?}", msg);
+        }
 
         match ctx.trans.send(msg) {
             Ok(()) => ctx.raft_metrics.send_message.add(msg_type, true),
@@ -248,7 +253,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let has_ready = self.reset_has_ready();
-        println!("======= {}", has_ready,);
         if !has_ready || self.destroy_progress().started() {
             return;
         }
@@ -268,11 +272,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             || true,
             |entry| entry.index == self.raft_group().raft.raft_log.last_index()
         ));
-        println!("tttttt {}", ready.messages().is_empty());
         if !ready.messages().is_empty() {
             debug_assert!(self.is_leader());
             for msg in ready.take_messages() {
-                println!("got message in ready, msg: {:?}", &msg);
                 if let Some(msg) = self.build_raft_message(ctx, msg) {
                     self.send_raft_message(ctx, msg);
                 }
@@ -363,14 +365,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<ER: RaftEngine> Storage<ER> {
+impl<EK, ER> Storage<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     /// Apply the ready to the storage. If there is any states need to be
     /// persisted, it will be written to `write_task`.
-    fn handle_raft_ready<EK: KvEngine>(
-        &mut self,
-        ready: &mut Ready,
-        write_task: &mut WriteTask<EK, ER>,
-    ) {
+    fn handle_raft_ready(&mut self, ready: &mut Ready, write_task: &mut WriteTask<EK, ER>) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
         let ever_persisted = self.ever_persisted();
 

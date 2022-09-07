@@ -12,7 +12,7 @@ use batch_system::{
 };
 use collections::HashMap;
 use crossbeam::channel::{Sender, TrySendError};
-use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory, OpenOptions};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
     metapb::Store,
@@ -41,6 +41,7 @@ use crate::{
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick, StoreMsg},
     Error, Result,
+    worker::{SnapshotRunner, SnapshotTask},
 };
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
@@ -64,6 +65,18 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub engine: ER,
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    pub snapshot_scheduler:  Scheduler<SnapshotTask<EK::Snapshot>>
+}
+
+impl<EK, ER, T> StoreContext<EK, ER, T>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn update_ticks_timeout(&mut self) {
+        self.tick_batch[PeerTick::Raft as usize].wait_duration = self.cfg.raft_base_tick_interval.0;
+        // TODO: Add other tick
+    }
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -139,6 +152,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
             }
             update_cfg(&self.poll_ctx.cfg.store_batch_system);
         }
+        self.poll_ctx.update_ticks_timeout();
     }
 
     fn handle_control(&mut self, fsm: &mut StoreFsm) -> Option<usize> {
@@ -211,6 +225,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     trans: T,
     router: StoreRouter<EK, ER>,
     log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    snapshot_scheduler: Scheduler<SnapshotTask<EK::Snapshot>>,
     write_senders: WriteSenders<EK, ER>,
     logger: Logger,
 }
@@ -224,6 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         trans: T,
         router: StoreRouter<EK, ER>,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        snapshot_scheduler: Scheduler<SnapshotTask<EK::Snapshot>>, 
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
     ) -> Self {
@@ -235,6 +251,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             trans,
             router,
             log_fetch_scheduler,
+            snapshot_scheduler,
             logger,
             write_senders: store_writers.senders(),
         }
@@ -252,6 +269,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     self.store_id,
                     self.engine.clone(),
                     self.log_fetch_scheduler.clone(),
+                    self.snapshot_scheduler.clone(),
                     &self.logger,
                 )? {
                     Some(p) => p,
@@ -303,6 +321,7 @@ where
             engine: self.engine.clone(),
             tablet_factory: self.tablet_factory.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
+            snapshot_scheduler: self.snapshot_scheduler.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -314,6 +333,8 @@ where
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     log_fetch_worker: Worker,
+    /// Worker for generating/applying/destroy snapshot
+    snapshot_worker: Worker,
     store_writers: StoreWriters<EK, ER>,
 }
 
@@ -321,6 +342,7 @@ impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
     fn default() -> Self {
         Self {
             log_fetch_worker: Worker::new("raftlog-fetch-worker"),
+            snapshot_worker: Worker::new("snapshot-worker"),
             store_writers: StoreWriters::default(),
         }
     }
@@ -357,6 +379,14 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             RaftlogFetchRunner::new(router.clone(), raft_engine.clone()),
         );
 
+        // snapshot handler 
+        let snapshot_scheduler = workers
+            .snapshot_worker
+            .start_with_timer("snapshot-worker", SnapshotRunner::new(
+                // FIXME: use tablet
+                tablet_factory.open_tablet(0, None, OpenOptions::default().set_create(true)).unwrap())
+            );
+
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
@@ -365,6 +395,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             trans,
             router.clone(),
             log_fetch_scheduler,
+            snapshot_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
         );

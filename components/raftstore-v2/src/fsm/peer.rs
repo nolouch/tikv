@@ -6,13 +6,15 @@ use std::borrow::Cow;
 
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, Peekable, RaftEngine, TabletFactory};
 use kvproto::metapb;
+use raft::eraftpb::MessageType;
 use raftstore::store::{Config, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver, Sender},
+    sys::DiskExt,
     time::{duration_to_sec, Instant},
 };
 
@@ -39,7 +41,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_factory: &dyn TabletFactory<EK>,
-        storage: Storage<ER>,
+        storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let peer = Peer::new(cfg, tablet_factory, storage)?;
         info!(peer.logger, "create peer");
@@ -162,6 +164,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             // This can happen only when the peer is about to be destroyed
             // or the node is shutting down. So it's OK to not to clean up
             // registry.
+
             if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
                 debug!(
                     logger,
@@ -187,6 +190,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
+        let idx = tick as usize;
+        let key = 1u16 << (idx as u16);
+        self.fsm.tick_registry &= !key;
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::RaftLogGc => unimplemented!(),
@@ -205,7 +211,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
-                PeerMsg::RaftMessage(msg) => self.fsm.peer.on_raft_message(self.store_ctx, msg),
+                PeerMsg::RaftMessage(msg) => {
+                    // TODO: remove
+                    if !(msg.get_message().get_msg_type() == MessageType::MsgHeartbeat
+                        || msg.get_message().get_msg_type() == MessageType::MsgHeartbeatResponse)
+                    {
+                        println!("peer on msg {:?}", msg);
+                    }
+                    self.fsm.peer.on_raft_message(self.store_ctx, msg)
+                }
                 PeerMsg::RaftQuery(cmd) => {
                     self.on_receive_command(cmd.send_time);
                     self.on_query(cmd.request, cmd.ch)
