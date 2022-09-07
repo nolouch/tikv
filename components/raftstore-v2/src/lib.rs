@@ -28,7 +28,7 @@ mod batch;
 mod bootstrap;
 mod fsm;
 mod operation;
-mod raft;
+pub mod raft;
 pub mod router;
 mod tablet;
 

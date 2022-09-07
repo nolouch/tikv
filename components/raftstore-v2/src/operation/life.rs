@@ -108,6 +108,7 @@ impl Store {
             return;
         };
         let msg_type = msg.get_message().get_msg_type();
+
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
         // Now the peer should not exist.

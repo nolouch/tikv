@@ -27,7 +27,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use protobuf::Message as _;
 use raft::{eraftpb, Ready};
 use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
-use slog::{debug, error, trace, warn};
+use slog::{debug, error, info, trace, warn};
 
 pub use self::async_writer::AsyncWriter;
 use crate::{
@@ -109,9 +109,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
         self.insert_peer_cache(msg.take_from_peer());
-        if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+        let r_msg = msg.take_message();
+        println!("raft step msg {:?}", r_msg);
+        if let Err(e) = self.raft_group_mut().step(r_msg) {
+            println!("raft step msg err {:?}", e);
             error!(self.logger, "raft step error"; "err" => ?e);
         }
+
         self.set_has_ready();
     }
 
@@ -244,6 +248,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let has_ready = self.reset_has_ready();
+        println!("======= {}", has_ready,);
         if !has_ready || self.destroy_progress().started() {
             return;
         }
@@ -263,10 +268,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             || true,
             |entry| entry.index == self.raft_group().raft.raft_log.last_index()
         ));
-
+        println!("tttttt {}", ready.messages().is_empty());
         if !ready.messages().is_empty() {
             debug_assert!(self.is_leader());
             for msg in ready.take_messages() {
+                println!("got message in ready, msg: {:?}", &msg);
                 if let Some(msg) = self.build_raft_message(ctx, msg) {
                     self.send_raft_message(ctx, msg);
                 }
