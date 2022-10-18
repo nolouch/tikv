@@ -373,10 +373,22 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         workers
             .store_writers
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
-        let read_scheduler = workers.async_read_worker.start(
-            "async-read-worker",
-            ReadRunner::new(router.clone(), raft_engine.clone()),
+
+        let snap_mgr = SnapManagerBuilder::default().build(
+            tablet_factory
+                .tablets_path()
+                .join(Path::new("snap"))
+                .to_str()
+                .unwrap()
+                .to_owned(),
         );
+        snap_mgr.init()?;
+        let mut read_runnter =
+            ReadRunner::new(router.clone(), raft_engine.clone()).set_snap_mgr(snap_mgr);
+        read_runner.set_tablet_factory();
+        let read_scheduler = workers
+            .async_read_worker
+            .start("async-read-worker", read_runner);
 
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
