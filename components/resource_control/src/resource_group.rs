@@ -294,7 +294,7 @@ impl ResourceController {
 
 impl TaskPriorityProvider for ResourceController {
     fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
-        self.resource_group(extras.metadata())
+        u64::MAX - self.resource_group(extras.metadata())
             .get_priority(extras.current_level() as usize)
     }
 }
