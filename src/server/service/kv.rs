@@ -487,7 +487,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             resource_manager.consume_penalty(resource_control_ctx);
         }
         let resource_control_ctx = req.get_context().get_resource_control_context();
-        let group_metrics = GRPC_MSG_GROUP_HISTOGRAM_VEC.with_label_values(&[resource_control_ctx.get_resource_group_name()]);
+        let group_metrics = GRPC_MSG_GROUP_HISTOGRAM_VEC
+            .with_label_values(&[resource_control_ctx.get_resource_group_name()]);
         GRPC_RESOURCE_GROUP_COUNTER_VEC
             .with_label_values(&[resource_control_ctx.get_resource_group_name()])
             .inc();
@@ -617,7 +618,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             resource_manager.consume_penalty(resource_control_ctx);
         }
         let resource_control_ctx = req.get_context().get_resource_control_context();
-        let group_metrics = GRPC_MSG_GROUP_HISTOGRAM_VEC.with_label_values(&[resource_control_ctx.get_resource_group_name()]);
+        let group_metrics = GRPC_MSG_GROUP_HISTOGRAM_VEC
+            .with_label_values(&[resource_control_ctx.get_resource_group_name()]);
         GRPC_RESOURCE_GROUP_COUNTER_VEC
             .with_label_values(&[resource_control_ctx.get_resource_group_name()])
             .inc();
@@ -1311,7 +1313,9 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
         GRPC_MSG_HISTOGRAM_STATIC
             .get(label)
             .observe(elapsed.as_secs_f64());
-        GRPC_MSG_GROUP_HISTOGRAM_VEC.with_label_values(&[&group]).observe(elapsed.as_secs_f64());
+        GRPC_MSG_GROUP_HISTOGRAM_VEC
+            .with_label_values(&[&group])
+            .observe(elapsed.as_secs_f64());
         record_request_source_metrics(source, elapsed);
         let exec_details = resp.cmd.as_mut().and_then(|cmd| match cmd {
             Get(resp) => Some(resp.mut_exec_details_v2()),
