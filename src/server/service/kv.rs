@@ -38,6 +38,7 @@ use tikv_util::{
 };
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
 use txn_types::{self, Key};
+use ResourcePriority;
 
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::{

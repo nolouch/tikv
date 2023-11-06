@@ -49,11 +49,10 @@ lazy_static! {
     .unwrap();
 }
 
-
 impl From<u32> for ResourcePriority {
     fn from(priority: u32) -> Self {
         // the mapping definition of priority in TIDB repo,
-        // see: https://github.com/bufferflies/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
+        // see: https://github.com/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
         match priority {
             1 => ResourcePriority::low,
             8 => ResourcePriority::medium,
@@ -63,10 +62,9 @@ impl From<u32> for ResourcePriority {
     }
 }
 
-
 impl From<String> for PoolName {
     fn from(name: String) -> Self {
-        match &name {
+        match name.as_str() {
             "unified_read_pool" => PoolName::unified_read_pool,
             _ => PoolName::unknown,
         }
