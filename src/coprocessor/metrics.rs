@@ -27,6 +27,7 @@ make_auto_flush_static_metric! {
         checksum_table,
         checksum_index,
         test,
+        all,
     }
 
     pub label_enum CF {

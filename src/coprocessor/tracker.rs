@@ -395,6 +395,7 @@ impl<E: Engine> Tracker<E> {
             static CHECKSUM_TABLE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static CHECKSUM_INDEX: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static TEST: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+            static ALL: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         }
         let tls_cell = match self.req_ctx.tag {
             ReqTag::select => &SELECT,
@@ -405,6 +406,7 @@ impl<E: Engine> Tracker<E> {
             ReqTag::checksum_table => &CHECKSUM_TABLE,
             ReqTag::checksum_index => &CHECKSUM_INDEX,
             ReqTag::test => &TEST,
+            ReqTag::all => &ALL,
         };
         tls_cell.with(|c| {
             let mut c = c.borrow_mut();

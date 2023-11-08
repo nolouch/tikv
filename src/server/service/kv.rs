@@ -499,7 +499,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             .inc();
 
         let begin_instant = Instant::now();
-        let future = future_copr(&self.copr, Some(ctx.peer()), req);
+        let future = future_copr(&self.copr, Some(ctx.peer()), req, begin_instant);
         let task = async move {
             let resp = future.await?.consume();
             let elapsed = begin_instant.saturating_elapsed();
@@ -1144,9 +1144,19 @@ fn response_batch_commands_request<F, T>(
                 resource_priority,
             };
             let task = MeasuredSingleResponse::new(id, resp, measure);
+            let elapsed: Duration = Instant::now().saturating_duration_since(begin);
+            GRPC_MSG_BEFORE_SEND_HISTOGRAM_STATIC
+                .get(label)
+                .get(resource_priority)
+                .observe(elapsed.as_secs_f64());
             if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
                 error!("KvService response batch commands fail"; "err" => ?e);
             }
+            let elapsed2: Duration = Instant::now().saturating_duration_since(begin);
+            GRPC_MSG_AFTER_SEND_HISTOGRAM_STATIC
+                .get(label)
+                .get(resource_priority)
+                .observe(elapsed2.as_secs_f64());
         }
     };
     poll_future_notify(task);
@@ -1253,7 +1263,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     .inc();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
-                    let resp = future_copr(copr, Some(peer.to_string()), req)
+                    let resp = future_copr(copr, Some(peer.to_string()), req, begin_instant)
                         .map_ok(|resp| {
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                         })
@@ -1349,7 +1359,7 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             source,
             resource_priority,
         } = measure;
-        let elapsed = now.saturating_duration_since(begin);
+        let elapsed: Duration = now.saturating_duration_since(begin);
         GRPC_MSG_HISTOGRAM_STATIC
             .get(label)
             .get(resource_priority)
@@ -2062,8 +2072,9 @@ fn future_copr<E: Engine>(
     copr: &Endpoint<E>,
     peer: Option<String>,
     req: Request,
+    begin: Instant,
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
-    let ret = copr.parse_and_handle_unary_request(req, peer);
+    let ret = copr.parse_and_handle_unary_request(req, peer, begin);
     async move { Ok(ret.await) }
 }
 
