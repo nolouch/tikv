@@ -74,6 +74,8 @@ pub struct Tracker<E: Engine> {
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
 
+    pub priority: ResourcePriority,
+
     _phantom: PhantomData<fn() -> E>,
 }
 
@@ -100,6 +102,7 @@ impl<E: Engine> Tracker<E> {
             slow_log_threshold,
             req_ctx,
             buckets: None,
+            priority: ResourcePriority::unknown,
             _phantom: PhantomData,
         }
     }
@@ -254,7 +257,6 @@ impl<E: Engine> Tracker<E> {
         if self.current_stage != TrackerState::AllItemFinished {
             return;
         }
-
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
         if self.total_process_time > self.slow_log_threshold {
@@ -301,34 +303,40 @@ impl<E: Engine> Tracker<E> {
         // req time
         COPR_REQ_HISTOGRAM_STATIC
             .get(self.req_ctx.tag)
+            .get(self.priority)
             .observe(time::duration_to_sec(self.req_lifetime));
 
         // wait time
         COPR_REQ_WAIT_TIME_STATIC
             .get(self.req_ctx.tag)
             .all
+            .get(self.priority)
             .observe(time::duration_to_sec(self.wait_time));
 
         // schedule wait time
         COPR_REQ_WAIT_TIME_STATIC
             .get(self.req_ctx.tag)
             .schedule
+            .get(self.priority)
             .observe(time::duration_to_sec(self.schedule_wait_time));
 
         // snapshot wait time
         COPR_REQ_WAIT_TIME_STATIC
             .get(self.req_ctx.tag)
             .snapshot
+            .get(self.priority)
             .observe(time::duration_to_sec(self.snapshot_wait_time));
 
         // handler build time
         COPR_REQ_HANDLER_BUILD_TIME_STATIC
             .get(self.req_ctx.tag)
+            .get(self.priority)
             .observe(time::duration_to_sec(self.handler_build_time));
 
         // handle time
         COPR_REQ_HANDLE_TIME_STATIC
             .get(self.req_ctx.tag)
+            .get(self.priority)
             .observe(time::duration_to_sec(self.total_process_time));
 
         // scan keys

@@ -66,13 +66,22 @@ make_auto_flush_static_metric! {
         locked,
     }
 
+    pub label_enum ResourcePriority {
+        high,
+        medium,
+        low,
+        unknown,
+    }
+
     pub struct CoprReqHistogram: LocalHistogram {
         "req" => ReqTag,
+        "priority" => ResourcePriority,
     }
 
     pub struct ReqWaitHistogram: LocalHistogram {
         "req" => ReqTag,
         "type" => WaitType,
+        "priority" => ResourcePriority,
     }
 
     pub struct CoprScanKeysHistogram: LocalHistogram {
@@ -91,20 +100,45 @@ make_auto_flush_static_metric! {
     }
 }
 
+impl From<u32> for ResourcePriority {
+    fn from(priority: u32) -> Self {
+        // the mapping definition of priority in TIDB repo,
+        // see: https://github.com/pingcap/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
+        match priority {
+            1 => ResourcePriority::low,
+            8 => ResourcePriority::medium,
+            16 => ResourcePriority::high,
+            _ => ResourcePriority::unknown,
+        }
+    }
+}
+
 lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_duration_seconds",
         "Bucketed histogram of coprocessor request duration",
-        &["req"],
+        &["req", "priority"],
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref COPR_REQ_HISTOGRAM_STATIC: CoprReqHistogram =
         auto_flush_from!(COPR_REQ_HISTOGRAM_VEC, CoprReqHistogram);
+
+
+    pub static ref ENDPOINT_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+            "tikv_endpoint_unary_request_duration_seconds",
+            "Bucketed histogram of coprocessor endpoint_unary_request duration",
+            &["req", "priority"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        )
+        .unwrap();
+        pub static ref ENDPOINT_REQ_HISTOGRAM_STATIC: CoprReqHistogram =
+            auto_flush_from!(ENDPOINT_REQ_HISTOGRAM_VEC, CoprReqHistogram);
+
     pub static ref COPR_REQ_HANDLE_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handle_seconds",
         "Bucketed histogram of coprocessor handle request duration",
-        &["req"],
+        &["req","priority"],
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
@@ -113,7 +147,7 @@ lazy_static! {
     pub static ref COPR_REQ_WAIT_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_wait_seconds",
         "Bucketed histogram of coprocessor request wait duration",
-        &["req", "type"],
+        &["req", "type", "priority"],
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
@@ -122,7 +156,7 @@ lazy_static! {
     pub static ref COPR_REQ_HANDLER_BUILD_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handler_build_seconds",
         "Bucketed histogram of coprocessor request handler build duration",
-        &["req"],
+        &["req", "priority"],
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();

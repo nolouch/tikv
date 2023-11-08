@@ -504,18 +504,26 @@ impl<E: Engine> Endpoint<E> {
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
-        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
-            r.get_resource_limiter(
-                req_ctx
-                    .context
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
-                req_ctx.context.get_request_source(),
-            )
+        let group_name = req_ctx
+            .context
+            .get_resource_control_context()
+            .get_resource_group_name();
+        let resource_limiter = self
+            .resource_ctl
+            .as_ref()
+            .and_then(|r| r.get_resource_limiter(group_name, req_ctx.context.get_request_source()));
+        let pri_num = self.resource_ctl.as_ref().and_then(|r| {
+            let p = r.get_resource_group_priority(group_name);
+            Some(p)
         });
         // box the tracker so that moving it is cheap.
-        let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
-
+        let mut priority_set = ResourcePriority::unknown;
+        if let Some(pri) = pri_num {
+            priority_set = ResourcePriority::from(pri);
+        }
+        let mut tracker_inner = Tracker::new(req_ctx, self.slow_log_threshold);
+        tracker_inner.priority = priority_set;
+        let tracker = Box::new(tracker_inner);
         let res = self
             .read_pool
             .spawn_handle(
@@ -541,6 +549,10 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
+        let group_name = req
+            .get_context()
+            .get_resource_control_context()
+            .get_resource_group_name().to_owned();
         if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
             req.get_context().get_busy_threshold_ms() as u64,
         )) {
@@ -554,6 +566,15 @@ impl<E: Engine> Endpoint<E> {
             RequestType::Unknown,
             req.start_ts,
         )));
+        let pri_num = self.resource_ctl.as_ref().and_then(|r| {
+            let p = r.get_resource_group_priority(group_name.as_ref());
+            Some(p)
+        });
+        // box the tracker so that moving it is cheap.
+        let mut priority_set = ResourcePriority::unknown;
+        if let Some(pri) = pri_num {
+            priority_set = ResourcePriority::from(pri);
+        }
         let result_of_batch = self.process_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
         let result_of_future = self
@@ -568,7 +589,12 @@ impl<E: Engine> Endpoint<E> {
                     res.into()
                 }
                 Ok(handle_fut) => {
+                    let now = Instant::now();
                     let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
+                    ENDPOINT_REQ_HISTOGRAM_STATIC
+                        .get(ReqTag::test)
+                        .get(priority_set)
+                        .observe(now.saturating_elapsed().as_secs_f64());
                     let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
                     res.set_batch_responses(batch_res.into());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
