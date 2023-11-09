@@ -615,6 +615,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -791,6 +792,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 resource_group_name,
                 requests[0].get_context().get_request_source(),
+                requests[0]
+                    .get_context()
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         let concurrency_manager = self.concurrency_manager.clone();
@@ -995,6 +1000,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1187,6 +1193,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1363,6 +1370,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1679,6 +1687,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1774,6 +1783,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 resource_group_name,
                 gets[0].get_context().get_request_source(),
+                gets[0]
+                    .get_context()
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1921,6 +1934,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -2427,6 +2441,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -2564,6 +2579,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -2726,6 +2742,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -2907,6 +2924,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);

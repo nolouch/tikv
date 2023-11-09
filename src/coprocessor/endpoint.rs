@@ -508,13 +508,22 @@ impl<E: Engine> Endpoint<E> {
             .context
             .get_resource_control_context()
             .get_resource_group_name();
-        let resource_limiter = self
-            .resource_ctl
-            .as_ref()
-            .and_then(|r| r.get_resource_limiter(group_name, req_ctx.context.get_request_source()));
         let pri_num = self.resource_ctl.as_ref().and_then(|r| {
             let p = r.get_resource_group_priority(group_name);
             Some(p)
+        });
+        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req_ctx.context.get_request_source(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_override_priority(),
+            )
         });
         // box the tracker so that moving it is cheap.
         let mut priority_set = ResourcePriority::unknown;
@@ -788,6 +797,10 @@ impl<E: Engine> Endpoint<E> {
                     .get_resource_control_context()
                     .get_resource_group_name(),
                 req_ctx.context.get_request_source(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         let key_ranges = req_ctx
