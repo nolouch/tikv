@@ -274,6 +274,10 @@ impl ReadPoolHandle {
         let mut busy_err = errorpb::ServerIsBusy::default();
         busy_err.set_reason("estimated wait time exceeds threshold".to_owned());
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
+        warn!("Already many pending tasks in the read queue, task is rejected";
+            "busy_threshold" => ?&busy_threshold,
+            "busy_err" => ?&busy_err,
+        );
         Err(busy_err)
     }
 }
@@ -391,6 +395,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
     cleanup_method: CleanupMethod,
+    metric_idx_from_task_meta_fn: Option<Arc<dyn Fn(&[u8]) -> usize + Send + Sync + 'static>>,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
     build_yatp_read_pool_with_name(
@@ -400,6 +405,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         resource_ctl,
         cleanup_method,
         unified_read_pool_name,
+        metric_idx_from_task_meta_fn,
     )
 }
 
@@ -410,9 +416,10 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
     resource_ctl: Option<Arc<ResourceController>>,
     cleanup_method: CleanupMethod,
     unified_read_pool_name: String,
+    metric_idx_from_task_meta_fn: Option<Arc<dyn Fn(&[u8]) -> usize + Send + Sync + 'static>>,
 ) -> ReadPool {
     let raftkv = Arc::new(Mutex::new(engine));
-    let builder = YatpPoolBuilder::new(ReporterTicker { reporter })
+    let mut builder = YatpPoolBuilder::new(ReporterTicker { reporter })
         .name_prefix(&unified_read_pool_name)
         .cleanup_method(cleanup_method)
         .stack_size(config.stack_size.0 as usize)
@@ -440,6 +447,12 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
         });
+    if let Some(metric_idx_from_task_meta_fn) = metric_idx_from_task_meta_fn {
+        builder = builder
+            .enable_task_wait_metrics()
+            .metric_idx_from_task_meta(metric_idx_from_task_meta_fn);
+    }
+
     let pool = if let Some(ref r) = resource_ctl {
         builder.build_priority_future_pool(r.clone())
     } else {
@@ -751,8 +764,14 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+            None,
+        );
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -777,7 +796,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
         tx1.send(()).unwrap();
@@ -799,8 +818,14 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+            None,
+        );
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -826,7 +851,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
 
@@ -839,7 +864,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
     }
@@ -855,8 +880,14 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+            None,
+        );
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -882,7 +913,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
 
@@ -899,7 +930,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
     }
@@ -982,6 +1013,7 @@ mod tests {
                 resource_manager,
                 CleanupMethod::InPlace,
                 name.clone(),
+                None,
             );
 
             let gen_task = || {
