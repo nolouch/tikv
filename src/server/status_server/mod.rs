@@ -44,7 +44,7 @@ pub use profile::HEAP_PROFILE_ACTIVE;
 use profile::*;
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
-use resource_control::ResourceGroupManager;
+use resource_control::{ResourceGroupManager, ResourceType};
 use security::{self, SecurityConfig};
 use serde::Serialize;
 use serde_json::Value;
@@ -805,6 +805,9 @@ where
                             (Method::PUT, "/resume_grpc") => {
                                 Self::handle_resume_grpc(grpc_service_mgr).await
                             }
+                            (Method::PUT, "/resource_limit") => {
+                                Self::handle_update_resource_limit(req, resource_manager.as_ref())
+                            }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }
@@ -874,7 +877,46 @@ where
             )),
         }
     }
+
+    pub fn handle_update_resource_limit(
+        req: Request<Body>,
+        mgr: Option<&Arc<ResourceGroupManager>>,
+    ) -> hyper::Result<Response<Body>> {
+        let query = req.uri().query().unwrap_or("");
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+        let group = match query_pairs.get("group") {
+            Some(val) => val,
+            None => "",
+        };
+
+        let priority = match query_pairs.get("priority") {
+            Some(val) => val.parse::<u64>().unwrap_or(0),
+            None => 0,
+        };
+
+        let value = match query_pairs.get("value") {
+            Some(val) => val.parse::<f64>().unwrap_or(0.0),
+            None => 0.0,
+        };
+        if let Some(mgr) = mgr {
+           let limit =  mgr.get_resource_limiter(group, "", priority);
+            if let Some(limit) = limit {
+                limit.get_limiter(ResourceType::Cpu).set_rate_limit(value*MICROS_PER_SEC);
+                return Ok(make_response(
+                    StatusCode::OK,
+                    format!("Successfully set priority_limit[{}] to {}", priority, value),
+                ))
+            }
+        };
+        Ok(
+            make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("ResourceGroupManager is not initialized"),
+            )
+        )
+    }
 }
+const MICROS_PER_SEC: f64 = 1_000_000.0;
 
 #[derive(Serialize)]
 struct BackgroundSetting {

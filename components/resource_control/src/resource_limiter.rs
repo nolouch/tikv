@@ -94,7 +94,7 @@ impl ResourceLimiter {
     }
 
     #[inline]
-    pub(crate) fn get_limiter(&self, ty: ResourceType) -> &QuotaLimiter {
+    pub fn get_limiter(&self, ty: ResourceType) -> &QuotaLimiter {
         &self.limiters[ty as usize]
     }
 
@@ -112,7 +112,7 @@ impl ResourceLimiter {
     }
 }
 
-pub(crate) struct QuotaLimiter {
+pub struct QuotaLimiter {
     limiter: Limiter,
     // total waiting duration in us
     total_wait_dur_us: AtomicU64,
@@ -136,7 +136,7 @@ impl QuotaLimiter {
         self.limiter.speed_limit()
     }
 
-    pub(crate) fn set_rate_limit(&self, mut limit: f64) {
+    pub fn set_rate_limit(&self, mut limit: f64) {
         // treat 0 as infinity.
         if limit <= f64::EPSILON {
             limit = f64::INFINITY;

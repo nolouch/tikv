@@ -28,7 +28,7 @@ pub mod channel;
 pub use channel::ResourceMetered;
 
 mod resource_limiter;
-pub use resource_limiter::ResourceLimiter;
+pub use resource_limiter::{ResourceLimiter, ResourceType};
 use tikv_util::worker::Worker;
 use worker::{
     GroupQuotaAdjustWorker, PriorityLimiterAdjustWorker, BACKGROUND_LIMIT_ADJUST_DURATION,

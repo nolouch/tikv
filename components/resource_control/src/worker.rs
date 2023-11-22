@@ -350,6 +350,18 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         }
         self.last_adjust_time = now;
 
+        self.trackers.iter().for_each(|t| {
+           let rate = t.limiter
+                .get_limiter(ResourceType::Cpu)
+                .get_rate_limit();
+            // 0 represent infinity
+            PRIORITY_QUOTA_LIMIT_VEC
+                .get_metric_with_label_values(&[t.priority])
+                .unwrap()
+                .set(rate as i64);
+        });
+        return;
+
         // fast path for only the default resource group which means resource
         // control is not used at all.
         let group_count = self.resource_ctl.get_group_count();
@@ -396,7 +408,7 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
                     .unwrap()
                     .set(0);
             });
-            return;
+            // return;
         }
         self.is_last_low_cpu = false;
 
