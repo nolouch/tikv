@@ -7,7 +7,7 @@ use std::{
     future::Future,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -20,13 +20,13 @@ use futures::{
     stream::StreamExt,
 };
 use prometheus::IntGauge;
-use yatp::Remote;
+use yatp::{Remote, ThreadPool};
 
 use super::metrics::*;
 use crate::{
     future::{block_on_timeout, poll_future_notify},
     timer::GLOBAL_TIMER_HANDLE,
-    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
+    yatp_pool::{DefaultTicker, YatpPoolBuilder},
 };
 
 #[derive(PartialEq)]
@@ -222,7 +222,7 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
     }
 
     pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
-        self.worker.remote()
+        self.worker.remote.clone()
     }
 }
 
@@ -301,8 +301,11 @@ impl<S: Into<String>> Builder<S> {
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
             .thread_count(self.thread_count, self.thread_count, self.thread_count)
-            .build_future_pool();
+            .build_single_level_pool();
+        let remote = pool.remote().clone();
+        let pool = Arc::new(Mutex::new(Some(pool)));
         Worker {
+            remote,
             stop: Arc::new(AtomicBool::new(false)),
             pool,
             counter: Arc::new(AtomicUsize::new(0)),
@@ -315,7 +318,8 @@ impl<S: Into<String>> Builder<S> {
 /// A worker that can schedule time consuming tasks.
 #[derive(Clone)]
 pub struct Worker {
-    pool: FuturePool,
+    pool: Arc<Mutex<Option<ThreadPool<yatp::task::future::TaskCell>>>>,
+    remote: Remote<yatp::task::future::TaskCell>,
     pending_capacity: usize,
     counter: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
@@ -367,7 +371,7 @@ impl Worker {
             .interval(std::time::Instant::now(), interval)
             .compat();
         let stop = self.stop.clone();
-        let _ = self.pool.spawn(async move {
+        self.remote.spawn(async move {
             while !stop.load(Ordering::Relaxed)
                 && let Some(Ok(_)) = interval.next().await
             {
@@ -385,7 +389,7 @@ impl Worker {
             .interval(std::time::Instant::now(), interval)
             .compat();
         let stop = self.stop.clone();
-        let _ = self.pool.spawn(async move {
+        self.remote.spawn(async move {
             while !stop.load(Ordering::Relaxed)
                 && let Some(Ok(_)) = interval.next().await
             {
@@ -399,7 +403,7 @@ impl Worker {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let _ = self.pool.spawn(f);
+        self.remote.spawn(f);
     }
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
@@ -434,8 +438,10 @@ impl Worker {
 
     /// Stops the worker thread.
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::Release);
-        self.pool.shutdown();
+        if let Some(pool) = self.pool.lock().unwrap().take() {
+            self.stop.store(true, Ordering::Release);
+            pool.shutdown();
+        }
     }
 
     /// Checks if underlying worker can't handle task immediately.
@@ -445,7 +451,7 @@ impl Worker {
     }
 
     pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
-        self.pool.remote().clone()
+        self.remote.clone()
     }
 
     fn start_impl<R: Runnable + 'static>(
@@ -455,7 +461,7 @@ impl Worker {
         metrics_pending_task_count: IntGauge,
     ) {
         let counter = self.counter.clone();
-        let _ = self.pool.spawn(async move {
+        self.remote.spawn(async move {
             let mut handle = RunnableWrapper { inner: runner };
             while let Some(msg) = receiver.next().await {
                 match msg {
@@ -482,7 +488,7 @@ impl Worker {
         let counter = self.counter.clone();
         let timeout = runner.get_interval();
         Self::delay_notify(tx.clone(), timeout);
-        let _ = self.pool.spawn(async move {
+        self.remote.spawn(async move {
             let mut handle = RunnableWrapper { inner: runner };
             while let Some(msg) = receiver.next().await {
                 match msg {
