@@ -104,6 +104,7 @@ pub enum ReadPoolHandle {
 }
 
 impl ReadPoolHandle {
+    #[inline]
     pub fn spawn<F>(
         &self,
         f: F,

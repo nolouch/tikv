@@ -80,6 +80,7 @@ impl FuturePool {
     }
 
     /// Spawns a future in the pool.
+    #[inline]
     pub fn spawn<F>(&self, future: F) -> Result<(), Full>
     where
         F: Future + Send + 'static,
@@ -87,6 +88,7 @@ impl FuturePool {
         self.inner.spawn(TrackedFuture::new(future), None)
     }
 
+    #[inline]
     pub fn spawn_with_extras<F>(&self, future: F, extras: Extras) -> Result<(), Full>
     where
         F: Future + Send + 'static,
