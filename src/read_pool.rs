@@ -136,8 +136,8 @@ impl ReadPoolHandle {
                 resource_ctl,
                 ..
             } => {
-                let running_tasks = running_tasks.clone();
-                running_tasks.inc();
+                //let running_tasks = running_tasks.clone();
+                // running_tasks.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
                     CommandPri::Normal => None,
@@ -151,7 +151,7 @@ impl ReadPoolHandle {
                         ControlledFuture::new(
                             async move {
                                 f.await;
-                                running_tasks.dec();
+                               // running_tasks.dec();
                             },
                             resource_ctl.clone(),
                             group_name,
@@ -162,7 +162,7 @@ impl ReadPoolHandle {
                 } else {
                     let fut = async move {
                         f.await;
-                        running_tasks.dec();
+                        //running_tasks.dec();
                     };
                     remote.spawn_with_extras(fut, extras)?;
                 }
@@ -216,9 +216,9 @@ impl ReadPoolHandle {
             } => read_pool_normal.get_running_task_count() / read_pool_normal.get_pool_size(),
             ReadPoolHandle::Yatp {
                 remote,
-                running_tasks,
+                //running_tasks,
                 ..
-            } => running_tasks.get() as usize / remote.get_pool_size(),
+            } => remote.get_running_task_count() / remote.get_pool_size(),
         }
     }
 
