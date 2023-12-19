@@ -93,13 +93,14 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(TrackedFuture::new(future), Some(extras))
+        self.inner.spawn_with_extras(TrackedFuture::new(future), extras)
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the
     /// future.
     ///
     /// The future will not be executed if the handle is not polled.
+    #[inline]
     pub fn spawn_handle<F>(
         &self,
         future: F,
@@ -202,6 +203,28 @@ impl PoolInner {
         } else {
             self.pool.spawn(f);
         }
+        Ok(())
+    }
+
+
+    #[inline(always)]
+    fn spawn_with_extras<F>(&self, future: F, extras: Extras) -> Result<(), Full>
+    where
+        F: Future + Send + 'static,
+    {
+        let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
+        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
+
+        self.gate_spawn()?;
+
+        metrics_running_task_count.inc();
+
+        let f = async move {
+            let _ = future.await;
+            metrics_handled_task_count.inc();
+            metrics_running_task_count.dec();
+        };
+        self.pool.spawn(future::TaskCell::new(f, extras));
         Ok(())
     }
 
