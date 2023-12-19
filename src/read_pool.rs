@@ -132,7 +132,7 @@ impl ReadPoolHandle {
             }
             ReadPoolHandle::Yatp {
                 remote,
-                running_tasks,
+              // running_tasks,
                 resource_ctl,
                 ..
             } => {

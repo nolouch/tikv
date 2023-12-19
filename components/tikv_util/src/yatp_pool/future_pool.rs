@@ -156,6 +156,7 @@ impl PoolInner {
         self.env.metrics_running_task_count.get() as usize
     }
 
+    #[inline]
     fn gate_spawn(&self) -> Result<(), Full> {
         fail_point!("future_pool_spawn_full", |_| Err(Full {
             current_tasks: 100,
@@ -178,6 +179,7 @@ impl PoolInner {
         }
     }
 
+    #[inline]
     fn spawn<F>(&self, future: F, extras: Option<Extras>) -> Result<(), Full>
     where
         F: Future + Send + 'static,
@@ -203,6 +205,7 @@ impl PoolInner {
         Ok(())
     }
 
+    #[inline]
     fn spawn_handle<F>(
         &self,
         future: F,
