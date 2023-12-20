@@ -88,7 +88,7 @@ impl FuturePool {
         self.inner.spawn(TrackedFuture::new(future), None)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn spawn_with_extras<F>(&self, future: F, extras: Extras) -> Result<(), Full>
     where
         F: Future + Send + 'static,
@@ -212,19 +212,20 @@ impl PoolInner {
     where
         F: Future + Send + 'static,
     {
-        let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
-        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
+        // let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
+        // let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
-        self.gate_spawn()?;
+        // self.gate_spawn()?;
 
-        metrics_running_task_count.inc();
+        // metrics_running_task_count.inc();
 
         let f = async move {
             let _ = future.await;
-            metrics_handled_task_count.inc();
-            metrics_running_task_count.dec();
+            // metrics_handled_task_count.inc();
+            // metrics_running_task_count.dec();
         };
-        self.pool.spawn(future::TaskCell::new(f, extras));
+        let task = future::TaskCell::new(f, extras);
+        self.pool.spawn(task);
         Ok(())
     }
 
