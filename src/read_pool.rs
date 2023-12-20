@@ -209,6 +209,7 @@ impl ReadPoolHandle {
         }
     }
 
+    #[inline]
     pub fn get_queue_size_per_worker(&self) -> usize {
         match self {
             ReadPoolHandle::FuturePools {
@@ -222,6 +223,7 @@ impl ReadPoolHandle {
         }
     }
 
+    #[inline]
     pub fn scale_pool_size(&mut self, max_thread_count: usize) {
         match self {
             ReadPoolHandle::FuturePools { .. } => {
@@ -233,6 +235,7 @@ impl ReadPoolHandle {
         }
     }
 
+    #[inline]
     pub fn get_ewma_time_slice(&self) -> Option<Duration> {
         match self {
             ReadPoolHandle::FuturePools { .. } => None,
@@ -253,6 +256,7 @@ impl ReadPoolHandle {
         }
     }
 
+    #[inline]
     pub fn get_estimated_wait_duration(&self) -> Option<Duration> {
         self.get_ewma_time_slice()
             .map(|s| s * (self.get_queue_size_per_worker() as u32))
