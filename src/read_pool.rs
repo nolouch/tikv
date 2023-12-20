@@ -266,6 +266,7 @@ impl ReadPoolHandle {
         &self,
         busy_threshold: Duration,
     ) -> Result<(), errorpb::ServerIsBusy> {
+        return Ok(());
         if busy_threshold.is_zero() {
             return Ok(());
         }
