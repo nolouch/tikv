@@ -93,7 +93,15 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn_with_extras(TrackedFuture::new(future), extras)
+        // self.inner.spawn_with_extras(TrackedFuture::new(future), extras)
+        let f = async move {
+            let _ = future.await;
+            // metrics_handled_task_count.inc();
+            // metrics_running_task_count.dec();
+        };
+        let task = future::TaskCell::new(f, extras);
+        self.inner.pool.spawn(task);
+        Ok(())
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the
