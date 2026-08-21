@@ -23,6 +23,14 @@ numeric_enum_serializing_mod! {perf_level_serde PerfLevel {
     OutOfBounds = 6,
 }}
 
+/// Engine-agnostic metrics captured during the current PerfContext observation
+/// window.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PerfContextDelta {
+    /// RocksDB block reads used for relative request attribution.
+    pub block_read_count: u64,
+}
+
 /// Extensions for measuring engine performance.
 ///
 /// A PerfContext is created with a specific measurement level,
@@ -63,6 +71,7 @@ pub trait PerfContext: Send {
     /// Reinitializes statistics and the perf level
     fn start_observe(&mut self);
 
-    /// Reports the current collected metrics to prometheus and trackers
-    fn report_metrics(&mut self, trackers: &[TrackerToken]);
+    /// Reports the current collected metrics to prometheus and trackers and
+    /// returns the metrics captured during this observation window.
+    fn report_metrics(&mut self, trackers: &[TrackerToken]) -> PerfContextDelta;
 }
