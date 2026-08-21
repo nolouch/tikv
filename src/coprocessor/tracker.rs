@@ -2,12 +2,12 @@
 
 use std::{cell::RefCell, marker::PhantomData};
 
-use ::tracker::{FutureTrack, get_tls_tracker_token, with_tls_tracker};
+use ::tracker::{FutureTrack, GLOBAL_TRACKERS, get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
 use protobuf::Message;
-use resource_metering::record_rocksdb_block_read_count;
+use resource_metering::{io_collection_config, record_rocksdb_block_read_count};
 use tikv_kv::Engine;
 use tikv_util::{
     memory::HeapSize,
@@ -75,6 +75,7 @@ pub struct Tracker<E: Engine> {
     total_storage_stats: Statistics,
     slow_log_threshold: Duration,
     scan_process_time_ns: u64,
+    poll_block_read_count_before: Option<u64>,
 
     pub buckets: Option<Arc<BucketMeta>>,
 
@@ -106,6 +107,7 @@ impl<E: Engine> Tracker<E> {
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
             scan_process_time_ns: 0,
+            poll_block_read_count_before: None,
             slow_log_threshold,
             req_ctx,
             req_tag,
@@ -189,13 +191,28 @@ impl<E: Engine> Tracker<E> {
         self.with_perf_context(|perf_context| {
             perf_context.start_observe();
         });
+        self.poll_block_read_count_before = io_collection_config()
+            .detailed_io_collection_enabled()
+            .then(Self::tracker_block_read_count);
     }
 
     fn on_poll_finish(&mut self) {
-        let report = self.with_perf_context(|perf_context| {
+        self.with_perf_context(|perf_context| {
             perf_context.report_metrics(&[get_tls_tracker_token()])
         });
-        record_rocksdb_block_read_count(report.block_read_count);
+        if let Some(block_read_count_before) = self.poll_block_read_count_before.take() {
+            let block_read_count =
+                Self::tracker_block_read_count().saturating_sub(block_read_count_before);
+            record_rocksdb_block_read_count(block_read_count);
+        }
+    }
+
+    fn tracker_block_read_count() -> u64 {
+        GLOBAL_TRACKERS
+            .with_tracker(get_tls_tracker_token(), |tracker| {
+                tracker.metrics.block_read_count
+            })
+            .unwrap_or_default()
     }
 
     pub fn poll_perf_context_tracker(&mut self) -> impl FutureTrack + '_ {

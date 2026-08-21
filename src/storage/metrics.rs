@@ -17,10 +17,11 @@ use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{ReadStats, util::build_key_range};
 use resource_metering::{
-    Guard as ResourceMeteringGuard, ResourceTagFactory, record_rocksdb_block_read_count,
+    Guard as ResourceMeteringGuard, ResourceTagFactory, io_collection_config,
+    record_rocksdb_block_read_count,
 };
 use tikv_kv::Engine;
-use tracker::get_tls_tracker_token;
+use tracker::{GLOBAL_TRACKERS, get_tls_tracker_token};
 
 use crate::{
     server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail},
@@ -390,20 +391,36 @@ fn with_perf_context_mut<E: Engine, T>(
     })
 }
 
-fn start_perf_context<E: Engine>(cmd: CommandKind) -> bool {
-    with_perf_context_mut::<E, _>(cmd, |perf_context| perf_context.start_observe()).is_some()
+fn tracker_block_read_count() -> u64 {
+    GLOBAL_TRACKERS
+        .with_tracker(get_tls_tracker_token(), |tracker| {
+            tracker.metrics.block_read_count
+        })
+        .unwrap_or_default()
 }
 
-fn finish_perf_context<E: Engine>(cmd: CommandKind, report_to_tracker: bool) {
-    let report = if report_to_tracker {
-        with_perf_context_mut::<E, _>(cmd, |perf_context| {
-            perf_context.report_metrics(&[get_tls_tracker_token()])
-        })
-    } else {
-        with_perf_context_mut::<E, _>(cmd, |perf_context| perf_context.report_metrics(&[]))
-    };
-    if let Some(report) = report {
-        record_rocksdb_block_read_count(report.block_read_count);
+struct PerfContextObservation {
+    block_read_count_before: Option<u64>,
+}
+
+fn start_perf_context<E: Engine>(cmd: CommandKind) -> Option<PerfContextObservation> {
+    with_perf_context_mut::<E, _>(cmd, |perf_context| perf_context.start_observe())?;
+    let block_read_count_before = io_collection_config()
+        .detailed_io_collection_enabled()
+        .then(tracker_block_read_count);
+    Some(PerfContextObservation {
+        block_read_count_before,
+    })
+}
+
+fn finish_perf_context<E: Engine>(cmd: CommandKind, observation: PerfContextObservation) {
+    let tracker_token = get_tls_tracker_token();
+    with_perf_context_mut::<E, _>(cmd, |perf_context| {
+        perf_context.report_metrics(&[tracker_token])
+    });
+    if let Some(block_read_count_before) = observation.block_read_count_before {
+        let block_read_count = tracker_block_read_count().saturating_sub(block_read_count_before);
+        record_rocksdb_block_read_count(block_read_count);
     }
 }
 
@@ -412,11 +429,11 @@ pub unsafe fn with_perf_context<E: Engine, Fn, T>(cmd: CommandKind, f: Fn) -> T
 where
     Fn: FnOnce() -> T,
 {
-    if !start_perf_context::<E>(cmd) {
+    let Some(observation) = start_perf_context::<E>(cmd) else {
         return f();
-    }
+    };
     let res = f();
-    finish_perf_context::<E>(cmd, true);
+    finish_perf_context::<E>(cmd, observation);
     res
 }
 
@@ -437,12 +454,12 @@ impl<'a, E: Engine> RequestPerfContext<'a, E> {
 
     pub(crate) fn observe(&self, context: &Context) -> RequestPerfContextGuard<E> {
         let tag_guard = self.resource_tag_factory.new_tag(context).attach();
-        let observed = start_perf_context::<E>(self.cmd);
-        debug_assert!(observed);
+        let observation = start_perf_context::<E>(self.cmd);
+        debug_assert!(observation.is_some());
         RequestPerfContextGuard {
             _tag_guard: tag_guard,
             cmd: self.cmd,
-            observed,
+            observation,
             _phantom: PhantomData,
         }
     }
@@ -451,14 +468,14 @@ impl<'a, E: Engine> RequestPerfContext<'a, E> {
 pub(crate) struct RequestPerfContextGuard<E: Engine> {
     _tag_guard: ResourceMeteringGuard,
     cmd: CommandKind,
-    observed: bool,
+    observation: Option<PerfContextObservation>,
     _phantom: PhantomData<fn() -> E>,
 }
 
 impl<E: Engine> Drop for RequestPerfContextGuard<E> {
     fn drop(&mut self) {
-        if self.observed {
-            finish_perf_context::<E>(self.cmd, false);
+        if let Some(observation) = self.observation.take() {
+            finish_perf_context::<E>(self.cmd, observation);
         }
     }
 }
